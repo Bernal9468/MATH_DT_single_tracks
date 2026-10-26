@@ -31,6 +31,8 @@ overridden in the environment, e.g. `DORDER=0 DT=1e-5 bash run/run_case.sh 2.2 r
 All cases one after the other: `for c in 0 1.1 1.2 2.1 2.2 3.1 3.2; do bash run/run_case.sh $c results/all/case$c; done`,
 then `python3 post/summarize.py results/all/summary.csv 0=results/all/case0 1.1=results/all/case1.1 ...`.
 Calibration: `python3 post/calibrate_multi.py results/calib --eta 0.748695 --c0 0.182604 --n 0.98581 --maxit 3`.
+Source + material (k, L, solidus, liquidus) on all six NIST quantities: `python3 post/calibrate_material.py results/calmat --maxit 4`
+(~65 min per case with sensitivities; on the cluster the 7 cases of an iteration run in parallel).
 
 ## 2. What runs on the GPU
 
@@ -69,6 +71,10 @@ Width is predicted within 9 % in every case; depth within 11 % except the smalle
 Power and speed changes (2.x, 3.x) are captured well for depth, width and TAM. The spot-size cases (1.1, 1.2) carry the
 largest TAM errors. Systematic biases: the liquid cooling rate is ~24 % too fast and the transition rate ~18 % too slow on
 average (latent-heat model), the solid rate scatters around the measurement (mean +7 %).
+
+Note: since 2026-10-26 `post/analyze_case.py` computes the cooling rates as the least-squares slope over the continuous
+window between the level crossings (smooth in the parameters, needed for their AD sensitivities); the table above used the
+sample-based fit, which differs by ≤ 2 %.
 
 Full history (calibration runs, convergence study, figures, PDF report): the parent folder `single_tracks/`
 (`results/`, `report/`).

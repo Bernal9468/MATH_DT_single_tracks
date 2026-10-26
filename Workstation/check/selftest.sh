@@ -4,12 +4,13 @@
 # every sensitivity history agrees with the reference to 1e-8 relative (CPU and GPU builds agree to ~1e-15; different thread
 # counts change the last digits only). Run from the folder that contains check/:  bash check/selftest.sh
 ROOT=$(cd "$(dirname "$0")/.." && pwd); cd "$ROOT" || exit 1
+[ -z "$CONTAINER" ] && [ -f "$ROOT/ubuntu22.sif" ] && export CONTAINER=$ROOT/ubuntu22.sif      # see run/run_case.sh
 OUT=results/selftest; rm -rf "$OUT"; mkdir -p results
 echo "== program: $( [ -n "$CONTAINER" ] && echo "container $CONTAINER" || ls bin/ | tr '\n' ' ')"
 if [ -z "$CONTAINER" ]; then
     for b in bin/thermal_in718_*; do
         miss=$(ldd "$b" 2>&1 | grep -E "not found|GLIBC.*not found|version .* not found")
-        [ -n "$miss" ] && { echo "FAIL: $b cannot be loaded here:"; echo "$miss"; echo "-> use the Singularity image (README, 'Container')"; exit 1; }
+        [ -n "$miss" ] && { echo "FAIL: $b cannot be loaded here:"; echo "$miss"; echo "-> bash container/get_image.sh (README, 'Container'), then run this test again"; exit 1; }
     done
 fi
 python3 mesh/make_plate_mesh.py mesh/selftest.mesh --h 0.04 --fine-x -0.4 0.5 --fine-y 0.2 --fine-z 0.3 --r 1.3 --hmax 1.0 > /dev/null || exit 1

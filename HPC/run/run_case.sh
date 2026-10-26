@@ -14,6 +14,10 @@
 # Analysis: python3 post/analyze_case.py OUTDIR
 PLATFORM=hpc
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# The program needs glibc >= 2.35 (built on Ubuntu 22.04). Where the system is older (cluster: glibc 2.28), it runs inside a
+# plain Ubuntu 22.04 Singularity image, ubuntu22.sif in this folder (container/get_image.sh); bin/ and lib/ are bind-mounted,
+# so the image never needs rebuilding. Found automatically; CONTAINER=<image.sif> selects another one.
+[ "$PLATFORM" = hpc ] && [ -z "$CONTAINER" ] && [ -f "$ROOT/ubuntu22.sif" ] && CONTAINER=$ROOT/ubuntu22.sif
 CASE=${1:?usage: run/run_case.sh CASE OUTDIR}; OUT=${2:?usage: run/run_case.sh CASE OUTDIR}
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 
@@ -54,8 +58,7 @@ if [ "$PLATFORM" = hpc ]; then
     BIN=${BIN:-$ROOT/bin/thermal_in718_cpu}
     export OMP_PROC_BIND=${OMP_PROC_BIND:-close} OMP_PLACES=${OMP_PLACES:-cores}
     LAUNCH=()
-    if [ -n "$CONTAINER" ]; then                                           # Singularity image (container/README in README.md)
-        BIN=/opt/single_tracks/bin/thermal_in718_cpu
+    if [ -n "$CONTAINER" ]; then                                           # program from bin/, run inside the image
         LAUNCH=(singularity exec --bind "$ROOT","$OUT","$(dirname "$MESH")" "$CONTAINER")
     fi
 else

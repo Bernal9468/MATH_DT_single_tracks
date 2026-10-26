@@ -15,15 +15,17 @@ bash check/selftest.sh                                    # on the login node: a
 #   or on a compute node:  sbatch slurm/selftest.sbatch    (output in logs/)
 ```
 
-The program was built on Ubuntu 22.04 and needs **glibc ≥ 2.35**. If the self-test reports that the program cannot be
-loaded (`GLIBC_2.3x not found`), use the container (section 5) — nothing else changes.
+The program was built on Ubuntu 22.04 and needs **glibc ≥ 2.35**. On our cluster (EL8, glibc 2.28) it runs inside a plain
+Ubuntu 22.04 image: `bash container/get_image.sh` once (no root needed, ~30 MB), then everything below works unchanged
+(section 5). Verified on the cluster: self-test PASS (max. difference 8e-16), all 7 cases reproduce the workstation results.
 
-Requirements on the cluster: `python3` (standard library only) and `bash`. No modules need to be loaded.
+Requirements on the cluster: `python3` (standard library only; 3.12 on the compute nodes), `bash`, `singularity` (for the
+image). No modules need to be loaded. This cluster requires `--ntasks` on every `sbatch` (all `slurm/*.sbatch` set it).
 
 ## 2. Run one case
 
 ```bash
-sbatch slurm/case.sbatch 0 results/case0                  # one whole node (40 cores), ~20-40 min
+sbatch slurm/case.sbatch 0 results/case0                  # one whole node (40 cores); ~85-90 min with sensitivities
 python3 post/analyze_case.py results/case0                # model vs NIST: depth, width, TAM, cooling rates + sensitivities
 ```
 
@@ -53,6 +55,7 @@ python3 post/summarize.py results/all/summary.csv 0=results/all/case0 1.1=result
         2.1=results/all/case2.1 2.2=results/all/case2.2 3.1=results/all/case3.1 3.2=results/all/case3.2
 
 sbatch slurm/calibrate.sbatch results/calib --maxit 3     # recalibrate eta, c0, n: each iteration = 7 parallel jobs
+sbatch slurm/calibrate_material.sbatch results/calmat     # source + material (k, L, solidus, liquidus) on all 6 quantities
 python3 tools/jobs.py -w 60                               # status: SLURM jobs, progress % and ETA of every run
 ```
 
@@ -92,17 +95,24 @@ Power and speed changes (2.x, 3.x) are captured well for depth, width and TAM. T
 largest TAM errors. Systematic biases: the liquid cooling rate is ~24 % too fast and the transition rate ~18 % too slow on
 average (latent-heat model), the solid rate scatters around the measurement (mean +7 %).
 
+Note: since 2026-10-26 `post/analyze_case.py` computes the cooling rates as the least-squares slope over the continuous
+window between the level crossings (smooth in the parameters, needed for their AD sensitivities); the table above used the
+sample-based fit, which differs by ≤ 2 %.
+
 Details, figures and the convergence study: the PDF report of the project (`report/` on the workstation).
 
-## 5. Container (if the native program does not load)
+## 5. Container (clusters with glibc < 2.35)
 
 ```bash
-bash container/build_container.sh                         # singularity --fakeroot, or podman if fakeroot is not allowed
-CONTAINER=$PWD/single_tracks.sif bash check/selftest.sh   # must print SELFTEST PASS
-CONTAINER=$PWD/single_tracks.sif sbatch slurm/case.sbatch 0 results/case0
+bash container/get_image.sh                               # singularity pull docker://ubuntu:22.04 -> ubuntu22.sif
+bash check/selftest.sh                                    # uses ./ubuntu22.sif automatically: SELFTEST PASS
 ```
 
-Only the program runs inside the image (`/opt/single_tracks`); the scripts use the cluster's `python3`.
+`run/run_case.sh` and `check/selftest.sh` pick up `ubuntu22.sif` from this folder automatically and run the program from
+`bin/` inside it (`bin/`, `lib/`, the mesh and output folders are bind-mounted), so a new program version never needs a new
+image. `CONTAINER=<image.sif>` selects another image. Keep the folder path free of commas (bind list).
+`container/single_tracks.def`/`build_container.sh` build a self-contained image instead; they need `--fakeroot` or podman,
+which this cluster does not allow (no subuid, NFS).
 
 ## 6. Contents
 
@@ -111,11 +121,11 @@ Only the program runs inside the image (`/opt/single_tracks`); the scripts use t
 | `bin/thermal_in718_cpu`, `lib/` | program (MFEM 4.9.1, MKL PARDISO, hypre BoomerAMG, Enzyme AD) and its libraries |
 | `config/calibration.env` | calibrated parameters and default discretisation |
 | `run/run_case.sh` | one case (any machine); `slurm/*.sbatch` — job scripts |
-| `post/` | `analyze_case.py` (NIST quantities + sensitivities), `summarize.py`, `calibrate_multi.py`, `calibrate_solid.py` |
+| `post/` | `analyze_case.py` (NIST quantities + AD sensitivities of all of them), `summarize.py`, `calibrate_multi.py`, `calibrate_material.py`, `calibrate_solid.py` |
 | `inputs/`, `mesh/` | cases and NIST data, laser path generator, mesh generator |
 | `tools/jobs.py` | job status |
 | `check/` | self-test and its reference (computed on the workstation) |
-| `container/` | Singularity / Podman recipes |
+| `container/` | `get_image.sh` (plain Ubuntu 22.04 image, used on this cluster); Singularity / Podman recipes |
 | `src/` | source code and Makefile of the program (for reference / rebuilding) |
 
 Solver notes: the Newton systems use CG + BoomerAMG above 200k unknowns (`AMG_MIN_DOFS`), PARDISO below; the sensitivity

@@ -11,3 +11,4 @@ HPC/logs/*.out
 *.tar.gz
 __pycache__/
 *.pyc
+.sing_cache/
