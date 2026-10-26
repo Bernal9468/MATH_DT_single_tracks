@@ -65,6 +65,26 @@ The account allows 10 jobs at a time: the calibration uses 1 driver + 7 case job
 **Full 10 mm NIST track**: `X0=-5 X1=5 sbatch --partition=compute2 --time=10-00:00:00 slurm/case.sbatch 0 results/case0_full`
 (~1.3M nodes; temperatures only est. 15-20 h, with sensitivities considerably longer — start with `DORDER=0`).
 
+## 3b. Nominal response vs NIST thermography + full set of first derivatives
+
+```bash
+bash get_nist_thermography.sh                             # NIST mds2-2716 thermography (550 MB, checksum verified)
+python3 -m pip install --user h5py scipy matplotlib       # once, for the comparison scripts
+sbatch slurm/thermo_all.sbatch results/thermo             # 7 cases: run with 20 sensitivities + field dumps, then figures
+```
+
+Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
+scale, both referenced to the front edge of the saturated spot), isotherms, centreline profile, midpoint history with the
+NIST cooling-rate windows; `derivatives.csv` + `derivatives_case<c>.png` - the 20 first derivatives of depth, width, TAM
+and the three cooling rates (also as elasticities) and dT/ds(t) at the midpoint for every parameter.
+The camera saturates above ~1520-1660 C and records nothing below ~940 C; NIST's emissivity per track is reproduced from
+their procedure (solidification plateau at 1298 C; tools/nist_thermo.py).
+
+**Sensitivity solver:** `SENS_SOLVER=krylov` (used by `thermo_all.sbatch`) solves the sensitivity system with
+Jacobi-preconditioned BiCGSTAB (~5 iterations per right-hand side) instead of a PARDISO factorisation every step: 4.7x faster
+on the test mesh, results within 1.5e-11 of PARDISO; a solve that does not converge falls back to PARDISO automatically.
+Default remains PARDISO.
+
 ## 4. Model and calibration (summary)
 
 * IN718 properties from open measured data (`src/thermal/material_in718.hpp`); solidus 1260 °C, liquidus 1336 °C.

@@ -71,8 +71,12 @@ gpu_enzyme: $(BIN)/thermal_enzyme_gpu_enzyme
 $(BIN)/thermal_enzyme_src: $(TH)/full_bridge_activation_tier1_oti.cpp $(DEPS) $(AO_OBJS) $(ENZ_OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(TH_FLAGS) $< $(AO_OBJS) $(ENZ_OBJ) -o $@ $(TH_LIBS)
 
-$(BIN)/thermal_enzyme_gpu: $(TH)/full_bridge_activation_tier1_oti.cpp $(DEPS) src/gpu/gpu_source.h src/gpu/gpu_newton.h $(AO_OBJS) $(OBJ)/gpu_source.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(ENZ_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(TH_FLAGS) -DUSE_GPU_SOURCE -DUSE_GPU_NEWTON -DUSE_GPU_SENS $(SWITCH) -Isrc/gpu $< $(AO_OBJS) $(OBJ)/gpu_source.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(ENZ_OBJ) -o $@ $(TH_LIBS) $(CUDA_LIB)
+$(BIN)/thermal_enzyme_gpu: $(TH)/full_bridge_activation_tier1_oti.cpp $(DEPS) src/gpu/gpu_source.h src/gpu/gpu_newton.h $(AO_OBJS) $(OBJ)/gpu_source.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(OBJ)/gpu_krylov.o $(ENZ_OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(TH_FLAGS) -DUSE_GPU_SOURCE -DUSE_GPU_NEWTON -DUSE_GPU_SENS $(SWITCH) -Isrc/gpu $< $(AO_OBJS) $(OBJ)/gpu_source.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(OBJ)/gpu_krylov.o $(ENZ_OBJ) -o $@ $(TH_LIBS) $(CUDA_LIB)
+
+# Jacobi-BiCGSTAB for the sensitivity system (SENS_SOLVER=krylov), GPU version of src/thermal/krylov_sens.hpp
+$(OBJ)/gpu_krylov.o: src/gpu/gpu_krylov.cu src/gpu/gpu_krylov.h | $(OBJ)
+	$(NVCC) $(NVFLAGS) -c $< -o $@
 
 # Newton assembly kernels: -fmad=false keeps the per-element arithmetic identical to the CPU loops
 $(OBJ)/gpu_newton.o: src/gpu/gpu_newton.cu src/gpu/gpu_newton.h | $(OBJ)
@@ -81,8 +85,8 @@ $(OBJ)/gpu_newton.o: src/gpu/gpu_newton.cu src/gpu/gpu_newton.h | $(OBJ)
 $(OBJ)/gpu_source.o: src/gpu/gpu_source.cu src/gpu/gpu_source.h src/gpu/srck_cell.hpp $(TH)/src_kernel.hpp | $(OBJ)
 	$(NVCC) $(NVFLAGS) -I$(TH) -c $< -o $@
 
-$(BIN)/thermal_enzyme_gpu_enzyme: $(TH)/full_bridge_activation_tier1_oti.cpp $(DEPS) src/gpu/gpu_source.h src/gpu/gpu_newton.h $(AO_OBJS) $(OBJ)/gpu_source_enzyme.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(ENZ_OBJ)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(TH_FLAGS) -DUSE_GPU_SOURCE -DUSE_GPU_NEWTON -DUSE_GPU_SENS $(SWITCH) -Isrc/gpu $< $(AO_OBJS) $(OBJ)/gpu_source_enzyme.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(ENZ_OBJ) -o $@ $(TH_LIBS) $(CUDA_LIB)
+$(BIN)/thermal_enzyme_gpu_enzyme: $(TH)/full_bridge_activation_tier1_oti.cpp $(DEPS) src/gpu/gpu_source.h src/gpu/gpu_newton.h $(AO_OBJS) $(OBJ)/gpu_source_enzyme.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(OBJ)/gpu_krylov.o $(ENZ_OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(TH_FLAGS) -DUSE_GPU_SOURCE -DUSE_GPU_NEWTON -DUSE_GPU_SENS $(SWITCH) -Isrc/gpu $< $(AO_OBJS) $(OBJ)/gpu_source_enzyme.o $(OBJ)/gpu_newton.o $(OBJ)/gpu_enzyme_sens.o $(OBJ)/cudss_backend.o $(OBJ)/gpu_krylov.o $(ENZ_OBJ) -o $@ $(TH_LIBS) $(CUDA_LIB)
 
 # sensitivity blocks (a)(b)(c): Enzyme in device code; -ffp-contract=off = no fused multiply-add (as the CPU object)
 $(OBJ)/gpu_enzyme_sens.o: src/gpu/gpu_enzyme_sens.cu src/gpu/gpu_enzyme_sens.h $(TH)/fb_enzyme_fns.hpp | $(OBJ)

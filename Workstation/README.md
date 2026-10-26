@@ -34,6 +34,29 @@ Calibration: `python3 post/calibrate_multi.py results/calib --eta 0.748695 --c0 
 Source + material (k, L, solidus, liquidus) on all six NIST quantities: `python3 post/calibrate_material.py results/calmat --maxit 4`
 (~65 min per case with sensitivities; on the cluster the 7 cases of an iteration run in parallel).
 
+## 3b. Nominal response vs NIST thermography + full set of first derivatives
+
+```bash
+bash get_nist_thermography.sh                             # NIST mds2-2716 thermography (550 MB, checksum verified)
+python3 -m pip install --user h5py scipy matplotlib       # once, for the comparison scripts
+SENS_SOLVER=krylov DORDER=1 FIELD_DUMP_DIR=$PWD/results/thermo/case0/fields FIELD_DUMP_EVERY=20 FIELD_DUMP_EVERY2=20 \
+    bash run/run_case.sh 0 results/thermo/case0
+python3 post/analyze_case.py results/thermo/case0 --json results/thermo/case0/result.json
+python3 tools/compare_thermography.py results/thermo/case0; python3 tools/sensitivity_report.py results/thermo/case0
+```
+
+Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
+scale, both referenced to the front edge of the saturated spot), isotherms, centreline profile, midpoint history with the
+NIST cooling-rate windows; `derivatives.csv` + `derivatives_case<c>.png` - the 20 first derivatives of depth, width, TAM
+and the three cooling rates (also as elasticities) and dT/ds(t) at the midpoint for every parameter.
+The camera saturates above ~1520-1660 C and records nothing below ~940 C; NIST's emissivity per track is reproduced from
+their procedure (solidification plateau at 1298 C; tools/nist_thermo.py).
+
+**Sensitivity solver:** `SENS_SOLVER=krylov` (used by `thermo_all.sbatch`) solves the sensitivity system with
+Jacobi-preconditioned BiCGSTAB (~5 iterations per right-hand side) instead of a PARDISO factorisation every step: 4.7x faster
+on the test mesh, results within 1.5e-11 of PARDISO; a solve that does not converge falls back to PARDISO automatically.
+Default remains PARDISO.
+
 ## 2. What runs on the GPU
 
 Goldak source and its AD derivatives, Newton assembly (conductivity refill, boundary terms, capacitance) and the Enzyme

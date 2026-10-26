@@ -12,3 +12,5 @@ HPC/logs/*.out
 __pycache__/
 *.pyc
 .sing_cache/
+HPC/data/
+Workstation/data/

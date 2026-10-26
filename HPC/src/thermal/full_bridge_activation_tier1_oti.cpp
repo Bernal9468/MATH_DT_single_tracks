@@ -33,6 +33,10 @@
 #include "gpu_enzyme_sens.h"               // bare_plate_single_layer: sensitivity blocks (a)(b)(c) on the GPU, Enzyme in device code
 static bool g_gpu_sens = false;            // GPU_SENS=0 keeps the CPU loops
 #endif
+#include "krylov_sens.hpp"                // MATH_DT: Jacobi-BiCGSTAB for the sensitivity system (SENS_SOLVER=krylov)
+#ifdef USE_GPU_NEWTON
+#include "gpu_krylov.h"                    // its GPU version
+#endif
 #ifdef USE_GPU_SOURCE
 #include "gpu_source.h"                    // bare_plate_single_layer: Goldak source + its first-order AD on the GPU
 static bool g_gpu_src = false;             // set after gpu_src_init succeeds; GPU_SOURCE=0 keeps the CPU path
@@ -2738,9 +2742,34 @@ class AoExactReducedSolver : public mfem::Solver {
     mutable std::vector<mfem::Vector> bf, xf;
     std::vector<std::unique_ptr<sensei::PardisoDirectSolver>> extra;   // OPT-1: H-1 additional factor copies
     int H_ = std::getenv("AO_SOLVE_HANDLES") ? std::max(1, std::atoi(std::getenv("AO_SOLVE_HANDLES"))) : 1;
+    // MATH_DT (2026-10-26): SENS_SOLVER=krylov solves the sensitivity system with Jacobi-preconditioned BiCGSTAB (GPU when
+    // available, else OpenMP; ksens / gpu_krylov) instead of factorising it every step; a right-hand side that does not
+    // converge makes PARDISO factorise that step's matrix and solve it (fallback, counted). SENS_KRYLOV_TOL (1e-13) on the
+    // Jacobi-preconditioned residual, SENS_KRYLOV_MAXIT (200). Default SENS_SOLVER=pardiso (unchanged behaviour).
+    const bool kry_ = std::getenv("SENS_SOLVER") && std::string(std::getenv("SENS_SOLVER")) == "krylov";
+    const double kry_tol_ = std::getenv("SENS_KRYLOV_TOL") ? std::atof(std::getenv("SENS_KRYLOV_TOL")) : 1e-13;
+    const int kry_maxit_ = std::getenv("SENS_KRYLOV_MAXIT") ? std::atoi(std::getenv("SENS_KRYLOV_MAXIT")) : 200;
+    std::vector<double> kdinv_;
+    bool fact_ok_ = false, kgpu_ = false; int kgpu_n_ = -1, kgpu_nnz_ = -1;
+    bool KSolve(const mfem::Vector &b, mfem::Vector &x) {     // x = 0 initial guess; true if converged
+        x.SetSize(b.Size()); x = 0.0;
+        const ksens::Csr M{Jr->Height(), Jr->GetI(), Jr->GetJ(), Jr->GetData()};
+        int its;
+#ifdef USE_GPU_NEWTON
+        if (kgpu_) its = gpu_krylov_solve(b.GetData(), x.GetData(), kry_tol_, kry_maxit_); else
+#endif
+        its = ksens::bicgstab(M, kdinv_.data(), b.GetData(), x.GetData(), kry_tol_, kry_maxit_);
+        if (its >= 0) { k_its += its; k_max = std::max(k_max, (long)its); return true; }
+        return false;
+    }
+    void EnsureFactor() {                                      // PARDISO fallback for this step's matrix
+        if (fact_ok_) return;
+        pard.Refactorize(*Jr); fact_ok_ = true; ++k_fallback;
+    }
 public:
     double t_asm = 0, t_rap = 0, t_fact = 0, t_solve = 0;
-    long n_fact = 0, n_rhs = 0;
+    long n_fact = 0, n_rhs = 0, k_its = 0, k_max = 0, k_fallback = 0;
+    bool Krylov() const { return kry_; }
     explicit AoExactReducedSolver(const TieMap &t)
         : mfem::Solver(t.ndof_free), tie(t), P(t.BuildProlongation()), Pt(mfem::Transpose(*P)) {}
     void SetOperator(const mfem::Operator &) override {}
@@ -2754,7 +2783,18 @@ public:
         std::unique_ptr<mfem::SparseMatrix> AP(spgemm.mult(Jf, *P));
         Jr.reset(spgemm.mult(*Pt, *AP));
         auto t2 = std::chrono::steady_clock::now();
-        if (H_ > 1) {
+        if (kry_) {                                            // Krylov: Jacobi preconditioner only, no factorisation
+            fact_ok_ = false;
+            ksens::diag_inverse(ksens::Csr{Jr->Height(), Jr->GetI(), Jr->GetJ(), Jr->GetData()}, kdinv_);
+#ifdef USE_GPU_NEWTON
+            static const bool kgpu_on = !(std::getenv("GPU_KRYLOV") && std::string(std::getenv("GPU_KRYLOV")) == "0");
+            if (kgpu_on && (Jr->Height() != kgpu_n_ || Jr->NumNonZeroElems() != kgpu_nnz_)) {
+                kgpu_ = gpu_krylov_setup(Jr->Height(), Jr->NumNonZeroElems(), Jr->GetI(), Jr->GetJ());
+                kgpu_n_ = Jr->Height(); kgpu_nnz_ = Jr->NumNonZeroElems();
+            }
+            if (kgpu_) gpu_krylov_values(Jr->GetData(), kdinv_.data());
+#endif
+        } else if (H_ > 1) {
             if (extra.empty()) for (int h = 1; h < H_; h++) extra.emplace_back(new sensei::PardisoDirectSolver(PardMtype()));
             const int mt = std::max(1, omp_get_max_threads() / H_);
             #pragma omp parallel num_threads(H_)
@@ -2765,7 +2805,7 @@ public:
                 mkl_set_num_threads_local(0);
             }
         } else
-        pard.Refactorize(*Jr);
+        { pard.Refactorize(*Jr); fact_ok_ = true; }
         if (const char *md = std::getenv("MATDUMP_DIR")) {   // bare_plate_single_layer: write the exact sensitivity matrix (solver benchmark)
             static const long at = std::getenv("MATDUMP_FACT") ? std::atol(std::getenv("MATDUMP_FACT")) : 1;
             if (n_fact + 1 == at) {
@@ -2786,7 +2826,9 @@ public:
     // reduced-space preconditioner / solve (free dofs)
     void Mult(const mfem::Vector &b, mfem::Vector &x) const override {
         auto t0 = std::chrono::steady_clock::now();
-        pard.Solve(b, x);
+        auto *self = const_cast<AoExactReducedSolver*>(this);
+        if (kry_) { if (!self->KSolve(b, x)) { self->EnsureFactor(); pard.Solve(b, x); } }
+        else pard.Solve(b, x);
         const_cast<AoExactReducedSolver*>(this)->t_solve += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
     // full-space right-hand sides -> full-space solutions, one batched PARDISO call
@@ -2797,6 +2839,16 @@ public:
         std::vector<const mfem::Vector*> Bp; std::vector<mfem::Vector*> Xp;
         for (int k = 0; k < m; k++) {
             bf[k].SetSize(tie.ndof_free); xf[k].SetSize(tie.ndof_free);
+        }
+        if (kry_) {                                            // Krylov: one solve per right-hand side, PARDISO fallback
+            for (int k = 0; k < m; k++) {
+                tie.Contract(*B[k], bf[k]);
+                if (!KSolve(bf[k], xf[k])) { EnsureFactor(); pard.Solve(bf[k], xf[k]); }
+                tie.Expand(xf[k], *X[k]);
+            }
+            t_solve += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            n_rhs += m;
+            return;
         }
         // OPT-1 (HYPAD lesson: coarse-grained parallelism over right-hand sides instead of a fork/join inside every solve).
         // AO_SOLVE_HANDLES=H keeps H independent PARDISO factorisations (concurrent solves on ONE handle deadlock, measured);
@@ -6683,6 +6735,10 @@ int main(int argc, char *argv[])
 
     if (ao_ex) printf("  [exact sensitivity solver] assemble=%.2f s  P^T J P=%.2f s  PARDISO factor=%.2f s  solves=%.2f s  (%ld factorisations, %ld rhs)\n",
                       ao_ex->t_asm, ao_ex->t_rap, ao_ex->t_fact, ao_ex->t_solve, ao_ex->n_fact, ao_ex->n_rhs);
+    if (ao_ex && ao_ex->Krylov())
+        printf("  [exact sensitivity solver] Krylov (Jacobi-BiCGSTAB): %ld rhs, %.2f iterations per rhs (max %ld), %ld PARDISO fallbacks; "
+               "the 'PARDISO factor' time above is the preconditioner set-up + any fallback factorisations\n",
+               ao_ex->n_rhs, ao_ex->n_rhs ? (double)ao_ex->k_its / ao_ex->n_rhs : 0.0, ao_ex->k_max, ao_ex->k_fallback);
     auto tw1=chrono::high_resolution_clock::now();
     double ws=chrono::duration<double>(tw1-t_wall_start).count();
     cout<<"\n=== BRIDGE multilayer complete ===\n"
