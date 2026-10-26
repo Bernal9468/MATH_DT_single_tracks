@@ -17,5 +17,6 @@ for k, arg in enumerate(sys.argv[2:]):
     row, errs = [c, M["power_W"], M["speed_mm_s"], M["spot_D4sigma_um"], "calibration" if k == 0 else "prediction"], []
     for q, mq in Q:
         e = (val[q] - float(M[mq])) / float(M[mq]) * 100; errs.append(e); row += [f"{val[q]:.4g}", M[mq], f"{e:.1f}"]
-    row += [f"{m['d_depth_um']['Rz']:.1f}", f"{m['d_depth_um']['Eta']:.1f}", f"{m['d_width_um']['Rz']:.1f}", f"{m['d_width_um']['Eta']:.1f}"]
+    sd = lambda q, p: f"{m[q][p]:.1f}" if p in m[q] else ""          # empty for temperature-only runs (DORDER=0)
+    row += [sd("d_depth_um", "Rz"), sd("d_depth_um", "Eta"), sd("d_width_um", "Rz"), sd("d_width_um", "Eta")]
     w.writerow(row); print(f"{c:5s} {row[4][:9]:9s}" + "".join(f"{e:+10.1f}" for e in errs))

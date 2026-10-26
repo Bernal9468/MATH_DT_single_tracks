@@ -74,6 +74,24 @@ The account allows 10 jobs at a time: the calibration uses 1 driver + 7 case job
 * Converged discretisation (mesh study 40 → 13.3 µm, dt 10 → 5 µs): **h = 20 µm, dt = 5 µs**.
 * Known limitation: the transition cooling rate (1336 → 1260 °C) is ~25 % slower than measured at every resolution.
 
+### Validation (all 7 cases, h = 20 µm, dt = 5 µs, final calibration) — model error vs NIST [%]
+
+| case | P [W] | v [mm/s] | spot [µm] | depth | width | TAM | liquid CR | transition CR | solid CR |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 285 | 960 | 67 | −0.1 | −0.9 | +4.9 | +14.1 | −25.9 | +3.2 |
+| 1.1 | 285 | 960 | 49 | −20.9 | −3.7 | −31.3 | +56.1 | +26.1 | −2.5 |
+| 1.2 | 285 | 960 | 82 | +9.9 | +8.8 | +36.3 | +23.6 | −25.9 | +40.0 |
+| 2.1 | 285 | 1200 | 67 | +10.6 | +5.8 | +12.2 | +20.6 | −38.1 | +11.2 |
+| 2.2 | 285 | 800 | 67 | −9.8 | −4.3 | −2.6 | +19.9 | −18.2 | −1.4 |
+| 3.1 | 325 | 960 | 67 | −4.9 | +5.0 | +2.6 | +10.4 | −18.9 | −11.2 |
+| 3.2 | 245 | 960 | 67 | +3.2 | −0.6 | +9.8 | +26.1 | −27.1 | +10.7 |
+| **RMS** | | | | **10.5** | **4.9** | **19.2** | **28.1** | **26.5** | **16.8** |
+
+Width is predicted within 9 % in every case; depth within 11 % except the smallest spot (1.1, keyhole, −21 %).
+Power and speed changes (2.x, 3.x) are captured well for depth, width and TAM. The spot-size cases (1.1, 1.2) carry the
+largest TAM errors. Systematic biases: the liquid cooling rate is ~24 % too fast and the transition rate ~18 % too slow on
+average (latent-heat model), the solid rate scatters around the measurement (mean +7 %).
+
 Details, figures and the convergence study: the PDF report of the project (`report/` on the workstation).
 
 ## 5. Container (if the native program does not load)
