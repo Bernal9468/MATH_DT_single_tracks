@@ -1,0 +1,13 @@
+# run outputs, generated meshes, containers and archives stay out of the repository
+HPC/results/*
+Workstation/results/*
+!HPC/results/.keep
+!Workstation/results/.keep
+HPC/logs/*.out
+*.mesh
+*_tie.txt
+*.sif
+*.tar
+*.tar.gz
+__pycache__/
+*.pyc

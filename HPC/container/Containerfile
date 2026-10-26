@@ -1,0 +1,5 @@
+# Same image as single_tracks.def, for Podman (used by build_container.sh when 'singularity build --fakeroot' is not allowed)
+FROM ubuntu:22.04
+COPY bin/thermal_in718_cpu /opt/single_tracks/bin/thermal_in718_cpu
+COPY lib /opt/single_tracks/lib
+ENV MKL_THREADING_LAYER=GNU

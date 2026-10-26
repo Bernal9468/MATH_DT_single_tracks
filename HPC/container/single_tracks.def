@@ -1,0 +1,27 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+# Singularity image of the CPU program (built on Ubuntu 22.04, glibc 2.35): runs on any cluster OS.
+# Build from the HPC folder:   bash container/build_container.sh      (-> single_tracks.sif, ~350 MB)
+# The scripts (run/, post/, mesh/) stay outside and run with the cluster's python3; only the program runs inside:
+#   CONTAINER=$PWD/single_tracks.sif bash run/run_case.sh 0 results/case0
+
+%files
+    bin/thermal_in718_cpu /opt/single_tracks/bin/thermal_in718_cpu
+    lib /opt/single_tracks/lib
+
+%environment
+    export MKL_THREADING_LAYER=GNU
+
+%labels
+    Description AMB2022-03 single-track thermal model (IN718), CPU build with Enzyme AD sensitivities
+    Calibration see config/calibration.env of the HPC folder
+
+%test
+    if ldd /opt/single_tracks/bin/thermal_in718_cpu | grep -q "not found"; then
+        ldd /opt/single_tracks/bin/thermal_in718_cpu; exit 1
+    fi
+    echo "thermal_in718_cpu: all libraries found"
+
+%runscript
+    exec /opt/single_tracks/bin/thermal_in718_cpu "$@"
