@@ -11,7 +11,7 @@ measured (3 repeats) vs model; (d) centreline profile T(xi); (e) temperature his
 the front edge passed.
 usage: compare_thermography.py RUNDIR [--fields DIR] [--h5 FILE] [--out FIG.png]
 """
-import argparse, glob, os, re, struct, sys
+import argparse, copy, glob, os, re, struct, sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -66,9 +66,7 @@ for tr in reps:
 
 # ---------------- model
 V = np.array(A.read_mesh_vertices(mesh)); top = np.where(np.abs(V[:, 2]) < 1e-9)[0]
-xs = np.unique(np.round(V[top, 0], 9)); ys = np.unique(np.round(V[top, 1], 9))
-ix = {x: i for i, x in enumerate(xs)}; iy = {y: i for i, y in enumerate(ys)}
-gi = np.array([ix[round(V[n, 0], 9)] for n in top]); gj = np.array([iy[round(V[n, 1], 9)] for n in top])
+xs, gi = np.unique(np.round(V[top, 0], 9), return_inverse=True); ys, gj = np.unique(np.round(V[top, 1], 9), return_inverse=True)
 
 def read_field(fn):
     with open(fn, "rb") as f:
@@ -107,7 +105,7 @@ for tr in reps:
 # ---------------- figure
 fig = plt.figure(figsize=(7.4, 8.6))
 gs = fig.add_gridspec(4, 2, height_ratios=[1, 1, 1.15, 1.15], hspace=0.55, wspace=0.28)
-norm = matplotlib.colors.Normalize(940, T_sat); cmap = plt.get_cmap("inferno").copy(); cmap.set_bad("#d9d8d3"); cmap.set_over("#fff7c2")
+norm = matplotlib.colors.Normalize(940, T_sat); cmap = copy.copy(plt.get_cmap("inferno")); cmap.set_bad("#d9d8d3"); cmap.set_over("#fff7c2")
 ext = [a.xi[0], a.xi[1], -a.ylim, a.ylim]
 # (a) measured field, repeat 1, steady frame
 tr = reps[0]; kmid = int(np.median(tr.frames)); xi, y, T = tr.frame_temperature(kmid)
