@@ -3793,7 +3793,16 @@ int main(int argc, char *argv[])
             for (int k = 0; k < bverts.Size(); k++)
                 if (fabs(mesh.GetVertex(bverts[k])[2]) > 1e-3) { at_zzero = false; break; }
             bool at_tie_interface = false;
-            if (at_zzero) {
+            // bare_plate_single_layer (2026-10-27): a z = 0 face is a bridge bottom only when its element lies ABOVE z = 0.
+            // The plate's top element layer (attribute 2, z <= 0) has its free top surface at z = 0; skipping it left the
+            // whole top surface without convection/radiation (FD: dT/dh_conv and dT/demissivity exactly 0).
+            double zc = 0.0;
+            {
+                Array<int> ev; mesh.GetElementVertices(elem, ev);
+                for (int k = 0; k < ev.Size(); k++) zc += mesh.GetVertex(ev[k])[2];
+                zc /= ev.Size();
+            }
+            if (at_zzero && zc > 0.0) {
                 if (mesh.GetAttribute(elem) != 1) {
                     at_tie_interface = true; // bridge's own bottom
                 } else {

@@ -8,7 +8,7 @@ relative shift", and they are physically the same effect). Parameters that are z
 are left out. P and η enter only as their product, so their bands are equal.
 usage: sensitivity_stack.py RUNDIR [--out FIG.png]
 """
-import argparse, json, os, re, sys
+import argparse, os, re, sys
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -44,33 +44,31 @@ fig, ax = plt.subplots(figsize=(8.6, 5.6))
 tm = t * 1e3
 ax.stackplot(tm, share * 100, colors=[COL[p] for p in pars], linewidth=0)
 cum = np.vstack([np.zeros(len(t)), np.cumsum(share, 0)]) * 100
-small, placed = [], []                                         # labels: thickest free spot away from the edges and the others
+Tlo, Thi = 300, max(2400, 1.05 * T.max()); yT = (T - Tlo) / (Thi - Tlo) * 100   # T(t) in the coordinates of the bands [%]
+placed = []                    # labels: thickest free spot away from the edges, the other labels and the T(t) curve
 inner = (tm > tm[0] + 0.1 * (tm[-1] - tm[0])) & (tm < tm[-1] - 0.1 * (tm[-1] - tm[0]))
 for i in np.argsort(-(share * inner).max(1)):
     p = pars[i]; raw = cum[i + 1] - cum[i]; hw = max(1, int(0.12 / np.median(np.diff(tm))))       # band thickness over the label width
     th = np.array([raw[max(0, j - hw):j + hw + 1].min() for j in range(len(raw))]) * inner
     for j in np.argsort(-th):
-        if th[j] < 6: small.append(p); break
+        if th[j] < 6: break
         y = 0.5 * (cum[i, j] + cum[i + 1, j])
+        hw_ms = 0.0105 * len(LABEL[p]) + 0.04                    # half the label width [ms]
+        if np.any(np.abs(yT[np.abs(tm - tm[j]) < hw_ms] - y) < 5.5): continue
         if all(abs(tm[j] - u) > 0.32 * (tm[-1] - tm[0]) / 2.6 or abs(y - w) > 5 for u, w in placed):
             placed.append((tm[j], y))
-            ax.text(tm[j], y, LABEL[p], ha="center", va="center", fontsize=7, color=INK,
+            ax.text(tm[j], y, LABEL[p], ha="center", va="center", fontsize=7.5, color=INK,
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85)); break
-ax.set_xlim(tm[0], tm[-1]); ax.set_ylim(0, 100); ax.set_xlabel("t [ms]")
-ax.set_ylabel("Cumulative ranked sensitivities [%]")
+ax.set_xlim(tm[0], tm[-1]); ax.set_ylim(0, 100); ax.set_xlabel("t [ms]", fontweight="bold", fontsize=10)
+ax.set_ylabel("Cumulative ranked sensitivities [%]", fontweight="bold", fontsize=10)
 ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter())
-a2 = ax.twinx(); a2.plot(tm, T, color=INK, lw=2.4); a2.set_ylabel("T [K]")
-a2.set_ylim(300, max(2400, 1.05 * T.max()))
+a2 = ax.twinx(); a2.plot(tm, T, color=INK, lw=2.4); a2.set_ylabel("T [K]", fontweight="bold", fontsize=10)
+a2.set_ylim(Tlo, Thi)
+for q in (ax, a2):
+    q.tick_params(labelsize=9)
+    for lb in q.get_xticklabels() + q.get_yticklabels(): lb.set_fontweight("bold")
 for s in ax.spines.values(): s.set_linestyle("--"); s.set_color(INK2)
 ton = (0 - x0) / v * 1e3
 a2.axhline(A.T_LIQ, color=INK2, lw=0.6, ls=":"); a2.axhline(A.T_SOL, color=INK2, lw=0.6, ls=":")
-if small:
-    hs = [matplotlib.patches.Patch(color=COL[p], label=LABEL[p]) for p in small]
-    ax.legend(handles=hs, loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=min(4, len(hs)), frameon=False, fontsize=7,
-              title="not labelled (thin bands)", title_fontsize=7)
-R = json.load(open(os.path.join(a.run, "result.json"))) if os.path.exists(os.path.join(a.run, "result.json")) else {}
-ax.set_title(f"Thermal field, track midpoint (x = y = z = 0), AMB2022-03 case {case}: share of each parameter in Σ|dT/ds_p| "
-             f"(Enzyme AD)\nlaser over the midpoint at t = {ton:.2f} ms; dotted: liquidus / solidus; peak T {T.max():.0f} K",
-             fontsize=8.5, loc="left", color=INK)
 out = a.out or os.path.join(a.run, f"sensitivity_stack_case{case}.png")
 fig.savefig(out, dpi=170, bbox_inches="tight"); print("written", out)
