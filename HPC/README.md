@@ -72,6 +72,9 @@ bash get_nist_thermography.sh                             # NIST mds2-2716 therm
 python3 -m pip install --user h5py scipy matplotlib       # once, for the comparison scripts
 sbatch slurm/thermo_all.sbatch results/thermo             # 7 cases: run with 20 sensitivities + field dumps, then figures
 python3 tools/thermo_summary.py                          # after all 7: summary.csv, derivatives_all.csv, summary_thermo.png
+python3 tools/fields_figure.py results/thermo/case0           # nominal T field + 12 derivative fields (section y = 0)
+# video (needs dense dumps: FIELD_DUMP_EVERY=2 FIELD_DUMP_EVERY2=2, ~15 GB per case; python3 -m pip install --user imageio-ffmpeg):
+python3 tools/make_video.py results/video/case0               # -> video_case0.mp4: NIST camera, model, derivatives, history
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour

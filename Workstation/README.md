@@ -45,6 +45,9 @@ SENS_SOLVER=krylov DORDER=1 FIELD_DUMP_DIR=$PWD/results/thermo/case0/fields FIEL
 python3 post/analyze_case.py results/thermo/case0 --json results/thermo/case0/result.json
 python3 tools/compare_thermography.py results/thermo/case0; python3 tools/sensitivity_report.py results/thermo/case0
 python3 tools/thermo_summary.py                          # all cases: summary.csv, derivatives_all.csv, summary_thermo.png
+python3 tools/fields_figure.py results/thermo/case0           # nominal T field + 12 derivative fields (section y = 0)
+# video (needs dense dumps: FIELD_DUMP_EVERY=2 FIELD_DUMP_EVERY2=2, ~15 GB per case; python3 -m pip install --user imageio-ffmpeg):
+python3 tools/make_video.py results/video/case0               # -> video_case0.mp4: NIST camera, model, derivatives, history
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
