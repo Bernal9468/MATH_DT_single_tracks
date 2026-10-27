@@ -71,6 +71,7 @@ The account allows 10 jobs at a time: the calibration uses 1 driver + 7 case job
 bash get_nist_thermography.sh                             # NIST mds2-2716 thermography (550 MB, checksum verified)
 python3 -m pip install --user h5py scipy matplotlib       # once, for the comparison scripts
 sbatch slurm/thermo_all.sbatch results/thermo             # 7 cases: run with 20 sensitivities + field dumps, then figures
+python3 tools/thermo_summary.py                          # after all 7: summary.csv, derivatives_all.csv, summary_thermo.png
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour

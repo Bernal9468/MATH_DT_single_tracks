@@ -44,6 +44,7 @@ SENS_SOLVER=krylov DORDER=1 FIELD_DUMP_DIR=$PWD/results/thermo/case0/fields FIEL
     bash run/run_case.sh 0 results/thermo/case0
 python3 post/analyze_case.py results/thermo/case0 --json results/thermo/case0/result.json
 python3 tools/compare_thermography.py results/thermo/case0; python3 tools/sensitivity_report.py results/thermo/case0
+python3 tools/thermo_summary.py                          # all cases: summary.csv, derivatives_all.csv, summary_thermo.png
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
