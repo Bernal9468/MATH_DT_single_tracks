@@ -38,6 +38,7 @@ Source + material (k, L, solidus, liquidus) on all six NIST quantities: `python3
 
 ```bash
 bash get_nist_thermography.sh                             # NIST mds2-2716 thermography (550 MB, checksum verified)
+# all 7 cases, hybrid: bash run/thermo_all.sh cpu &  bash run/thermo_all.sh gpu &
 python3 -m pip install --user h5py scipy matplotlib       # once, for the comparison scripts
 SENS_SOLVER=krylov DORDER=1 FIELD_DUMP_DIR=$PWD/results/thermo/case0/fields FIELD_DUMP_EVERY=20 FIELD_DUMP_EVERY2=20 \
     bash run/run_case.sh 0 results/thermo/case0
