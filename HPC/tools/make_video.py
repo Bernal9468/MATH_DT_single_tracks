@@ -90,6 +90,7 @@ cam = copy.copy(plt.get_cmap("inferno")); cam.set_bad("#d9d8d3"); cam.set_over("
 ncam = matplotlib.colors.Normalize(940, T_sat); nfull = matplotlib.colors.Normalize(25, 2500)
 axs = [fig.add_subplot(gs[i, 0]) for i in range(4)] + [fig.add_subplot(gs[i, 1]) for i in range(4)]
 title = fig.suptitle("", x=0.05, ha="left", fontsize=11, color=INK)
+clock = fig.text(0.97, 0.965, "", ha="right", va="center", fontsize=11, color="#eb6834", family="DejaVu Sans Mono")
 cbs = []
 
 def draw(n):
@@ -144,9 +145,10 @@ def draw(n):
         for j in range(4):
             cbs.append(fig.colorbar(sm("RdBu_r", matplotlib.colors.Normalize(-scale[j], scale[j])), ax=axs[4 + j], fraction=0.015, pad=0.01))
         for c in cbs: c.ax.tick_params(labelsize=6.5)
-    laser = "laser ON" if t <= (x1 - x0) / v + 1e-9 else "laser OFF (cool-down)"
-    title.set_text(f"AMB2022-03 case {case} ({tr.P:.0f} W, {v:.0f} mm/s, D4σ {tr.spot:.0f} µm): nominal field, first derivatives "
-                   f"(Enzyme AD) and NIST thermography     t = {t * 1e3:.3f} ms, {laser}")
+    laser = "laser ON " if t <= (x1 - x0) / v + 1e-9 else "laser OFF"
+    title.set_text(f"AMB2022-03 case {case} ({tr.P:.0f} W, {v:.0f} mm/s, D4σ {tr.spot:.0f} µm): model (nominal + AD first "
+                   f"derivatives) vs NIST thermography")
+    clock.set_text(f"t = {t * 1e3:.3f} ms   {laser}")
     return []
 
 out = a.out or os.path.join(a.run, f"video_case{case}.mp4")
