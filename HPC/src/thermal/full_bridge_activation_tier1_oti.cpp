@@ -178,6 +178,9 @@ static double g_vxscale = 0.0, g_tshift = 0.0;
 // Vx is a time scaling about g_tpivot (= window start -ts), the SAME definition used by the AD source kernel
 // (src_kernel.hpp) and by block (f)'s closed-form chain rule, so -vxscale/-tshift FD verify it exactly.
 static double g_tpivot = 0.0;
+// MATH_DT (2026-10-27): KQUAD_ORDER overrides the volume quadrature order of the conduction terms (default 2*OrderGrad
+// = 3x3x3 Gauss points on trilinear hexes); KQUAD_ORDER=3 gives 2x2x2, the rule of Abaqus DC3D8 (Abaqus replica checks).
+static int kquad_order(int def) { static const int o = getenv("KQUAD_ORDER") ? atoi(getenv("KQUAD_ORDER")) : 0; return o > 0 ? o : def; }
 #ifdef USE_ENZYME_AD
 static const bool g_src_fd_legacy = (getenv("SRC_FD_LEGACY") != nullptr);   // old FD source derivatives (comparison only)
 #else
@@ -1392,7 +1395,7 @@ struct PersistentK {
         const FiniteElement &fe0 = *fes.GetFE(0);
         IsoparametricTransformation T0; fes.GetElementTransformation(0, &T0);
         nd = fe0.GetDof();
-        const int order0 = 2 * T0.OrderGrad(&fe0);
+        const int order0 = kquad_order(2 * T0.OrderGrad(&fe0));
         const IntegrationRule &ir = IntRules.Get(fe0.GetGeomType(), order0);
         nq = ir.GetNPoints();
         ok = (nd == 8) && (fe0.GetDim() == 3) && nq > 0;
@@ -1411,7 +1414,7 @@ struct PersistentK {
                 const FiniteElement &el = *fes.GetFE(e);
                 fes.GetElementTransformation(e, &Tr);
                 fes.GetElementDofs(e, vdl);
-                if (vdl.Size() != nd || el.GetDof() != nd || 2 * Tr.OrderGrad(&el) != order0) { bad |= 1; continue; }
+                if (vdl.Size() != nd || el.GetDof() != nd || kquad_order(2 * Tr.OrderGrad(&el)) != order0) { bad |= 1; continue; }
                 attr[e] = mesh.GetAttribute(e);
                 for (int a = 0; a < nd; a++) vd[(size_t)e*nd + a] = vdl[a];
                 for (int q = 0; q < nq; q++) {
@@ -1658,7 +1661,7 @@ public:
             dshape.SetSize(dof, dm); gshape_e.SetSize(dof, dm); shp.SetSize(dof);
             Vector Tloc(dof);
             for (int a = 0; a < dof; a++) Tloc(a) = Tp[ec.vdofs[a]];
-            const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), 2*Trans.OrderGrad(&el));
+            const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), kquad_order(2*Trans.OrderGrad(&el)));
             int nq = ir.GetNPoints();
             ec.shape.resize(nq); ec.rowcoef.resize(nq);
             bool any_nonzero = false;
@@ -2133,7 +2136,7 @@ public:
                     int dof = el.GetDof(), dm = el.GetDim();
                     fes.GetElementDofs(e, kpa_vdofs[e]);
                     const Array<int> &vd = kpa_vdofs[e];
-                    const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), 2*Trans.OrderGrad(&el));
+                    const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), kquad_order(2*Trans.OrderGrad(&el)));
                     int nq = ir.GetNPoints();
                     kpa_shape[e].resize(nq); kpa_gshape[e].resize(nq); kpa_weight[e].resize(nq);
                     DenseMatrix dshape(dof, dm);
@@ -3115,7 +3118,7 @@ struct DomSensCache {
             fespace.GetElementTransformation(e, &Trans);
             int dof = el.GetDof(), dm = el.GetDim();
             fespace.GetElementDofs(e, vdofs[e]);
-            const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), 2*Trans.OrderGrad(&el));
+            const IntegrationRule &ir = IntRules.Get(el.GetGeomType(), kquad_order(2*Trans.OrderGrad(&el)));
             int nq = ir.GetNPoints();
             shape[e].resize(nq); gshape[e].resize(nq); weight[e].resize(nq);
             DenseMatrix dshape(dof, dm);
@@ -4471,6 +4474,14 @@ int main(int argc, char *argv[])
           g_src_nom_ms += now_ms() - tb0; }
         f_src *= (g_pscale * g_etascale);   // P3 toy-FD: pure multiplicative scale
         for (int i = 0; i < ndof; i++) if (!node_active[i]) f_src[i] = 0.0;
+        if (const char *sdd = getenv("SRC_DUMP_DIR")) {   // MATH_DT (2026-10-27): nodal source of every step attempt, for the
+            static FILE *sf = fopen((std::string(sdd) + "/fsrc.bin").c_str(), "wb");   // Abaqus replica (*CFLUX); records:
+            const double te = t + dt_try; long long nz = 0;                          // t_end, nnz, nnz x (int64 dof, value)
+            for (int i = 0; i < ndof; i++) if (f_src[i] != 0.0) nz++;
+            fwrite(&te, 8, 1, sf); fwrite(&nz, 8, 1, sf);
+            for (long long i = 0; i < ndof; i++) if (f_src[i] != 0.0) { fwrite(&i, 8, 1, sf); fwrite(&f_src[i], 8, 1, sf); }
+            fflush(sf);
+        }
         if (getenv("FSRC_TRACE")) {
             int fi = atoi(getenv("FSRC_TRACE"));
             printf("  [FSRC] i=%d t=%.9f dt=%.9e f_src=%.9e node_active=%d\n", fi, t, dt_try, f_src[fi], (int)node_active[fi]);

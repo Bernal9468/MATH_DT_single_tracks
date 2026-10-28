@@ -56,6 +56,12 @@ python3 tools/make_video_plate.py --cases                     # -> results/video
 python3 tools/sensitivity_stack.py results/thermo/case0           # -> sensitivity_stack_case0.png: cumulative ranked dT/ds_p shares at the midpoint, with T(t)
 python3 tools/nist_temperature.py results/thermo/case0            # -> nist_temperature_case0.png: midpoint T(t), model vs NIST repeats + reported TAM/CRs; --full: whole history
 python3 tools/nist_temperature.py --all results/thermo          # -> nist_temperature_all.png: TAM and 3 cooling rates, model vs NIST, 7 cases
+# derivatives vs Abaqus finite differences (k, cp, rho, L; central +-1 %), case 0 on the 40 um mesh: MFEM run with the nodal
+# laser source dumped, its Abaqus replica (same mesh, tables, BCs, time steps and nodal source; one Abaqus step per MFEM step)
+SRC_DUMP_DIR=$PWD/results/abaqus_fd/mfem FIELD_DUMP_DIR=$PWD/results/abaqus_fd/mfem/fields FIELD_DUMP_EVERY=10 FIELD_DUMP_EVERY2=10 \
+    H_MESH=0.04 DORDER=1 BIN=$PWD/bin/thermal_in718_gpu bash run/run_case.sh 0 results/abaqus_fd/mfem      # ~25 min
+JOBS=5 CPUS=3 bash run/abaqus_fd.sh results/abaqus_fd/mfem results/abaqus_fd/fd 0.01                       # 9 Abaqus jobs, ~7.5 h
+python3 tools/abaqus_fd_compare.py results/abaqus_fd/mfem results/abaqus_fd/fd --t 0.75 1.5 2.4          # -> abaqus_fd_probe.png, abaqus_fd_line_t*.png
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
