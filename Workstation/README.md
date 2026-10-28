@@ -62,6 +62,7 @@ SRC_DUMP_DIR=$PWD/results/abaqus_fd/mfem FIELD_DUMP_DIR=$PWD/results/abaqus_fd/m
     H_MESH=0.04 DORDER=1 BIN=$PWD/bin/thermal_in718_gpu bash run/run_case.sh 0 results/abaqus_fd/mfem      # ~25 min
 JOBS=5 CPUS=3 bash run/abaqus_fd.sh results/abaqus_fd/mfem results/abaqus_fd/fd 0.01                       # 9 Abaqus jobs, ~7.5 h
 python3 tools/abaqus_fd_compare.py results/abaqus_fd/mfem results/abaqus_fd/fd --t 0.75 1.5 2.4          # -> abaqus_fd_probe.png, abaqus_fd_line_t*.png
+/usr/bin/python3 tools/geometry_figure.py results/abaqus_fd/mfem                                         # -> results/abaqus_fd/geometry.png: plate, mesh, BCs, laser path, probe (needs mplot3d)
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour
