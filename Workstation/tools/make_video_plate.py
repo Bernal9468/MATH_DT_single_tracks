@@ -35,6 +35,7 @@ BANDS = ["#0012ff", "#0060ff", "#00aaff", "#00dcf0", "#00d28c", "#00b843", "#66c
 LEV = np.linspace(300.0, 2400.0, len(BANDS) + 1)
 CLEV = np.concatenate([[0], LEV[1:-1], [1e5]])
 CMAP = matplotlib.colors.ListedColormap(BANDS); NORM = matplotlib.colors.BoundaryNorm(LEV, CMAP.N)
+D4S = "D4σ: laser spot diameter = 4σ, σ the standard deviation of the Gaussian intensity profile I(r) = I₀ exp(−r²/2σ²); equal to the 1/e² diameter (e.g. 67 µm: σ = 16.75 µm, 1/e² radius 33.5 µm)"
 
 # plate layout [mm], y up (Fig. 3): line name -> (x of the track start, y)
 L_TRACK, PITCH, X_RIGHT, DY_LEFT = 10.0, 0.51, 12.2, -0.19
@@ -87,9 +88,9 @@ print(len(seq), "tracks,", len(frames), "frames; missing cases:", sorted({n.spli
 
 fig = plt.figure(figsize=(12.8, 7.2), dpi=150)
 axp = fig.add_axes([0.11, 0.52, 0.87, 0.34])                    # plate overview
-axz = fig.add_axes([0.13, 0.10, 0.38, 0.33])                    # active track, top view
-axs = fig.add_axes([0.57, 0.10, 0.41, 0.33])                    # active track, centreline section
-axc = fig.add_axes([0.012, 0.10, 0.016, 0.76])
+axz = fig.add_axes([0.13, 0.13, 0.38, 0.31])                    # active track, top view
+axs = fig.add_axes([0.57, 0.13, 0.41, 0.31])                    # active track, centreline section
+axc = fig.add_axes([0.012, 0.13, 0.016, 0.73])
 cb = matplotlib.colorbar.ColorbarBase(axc, cmap=CMAP, norm=NORM, boundaries=LEV, ticks=LEV, spacing="uniform")
 cb.ax.set_yticklabels([f"{x:.0f}" for x in LEV]); cb.ax.tick_params(labelsize=8, length=0); cb.outline.set_edgecolor("#555555")
 for k in range(1, len(LEV) - 1): cb.ax.axhline(LEV[k], color="#333333", lw=0.6)
@@ -99,9 +100,9 @@ h_t = fig.text(0.07, 0.905, "", fontsize=13, fontweight="bold")
 h_l = fig.text(0.30, 0.905, "", fontsize=13, fontweight="bold")
 h_m = fig.text(0.45, 0.905, "", fontsize=13)
 fig.text(0.98, 0.008, ("one track per case on the AMB2022-03 track geometry (pitch, length: NIST challenge description, Fig. 3); "
-         "simulated window around each track midpoint;\nplate back at ambient between tracks" if a.cases else
+         "simulated window around each track midpoint;\nplate back at ambient between tracks\n" + D4S if a.cases else
          "AMB2022-03 plate layout (NIST challenge description, Fig. 3); simulated window around each track midpoint;\n"
-         "repeats share the simulation; tracks scanned in line order, plate back at ambient between tracks"),
+         "repeats share the simulation; tracks scanned in line order, plate back at ambient between tracks\n" + D4S),
          fontsize=8, color="#555555", ha="right", va="bottom")
 ys = [p[1] for p in POS.values()]
 PX = (min(p[0] for p in POS.values()) - 1.0, max(p[0] for p in POS.values()) + L_TRACK + 1.0); PY = (min(ys) - 0.45, max(ys) + 0.45)

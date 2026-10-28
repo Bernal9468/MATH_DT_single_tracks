@@ -108,6 +108,8 @@ h_t = fig.text(0.635, 0.86, "", fontsize=19, fontweight="bold")
 h_m = fig.text(0.635, 0.80, "", fontsize=13)
 mark3 = fig.text(0, 0, "▼", fontsize=26, ha="center", va="bottom", visible=False)
 h_l = fig.text(0.635, 0.745, "", fontsize=13, fontweight="bold")
+fig.text(0.98, 0.012, "D4σ: laser spot diameter = 4σ, σ the standard deviation of the Gaussian intensity profile I(r) = I₀ exp(−r²/2σ²); equal to the 1/e² diameter (e.g. 67 µm: σ = 16.75 µm, 1/e² radius 33.5 µm)",
+         fontsize=8, color="#555555", ha="right", va="bottom")
 
 
 def edges3d(ax):
