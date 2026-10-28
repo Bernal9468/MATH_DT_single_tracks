@@ -100,6 +100,10 @@ for k in range(1, len(LEV) - 1): cb.ax.axhline(LEV[k], color="#333333", lw=0.6)
 fig.text(0.008, 0.86, r"$T$ [K]", fontsize=17, fontweight="bold", va="bottom")
 ax3 = fig.add_axes([0.16, 0.0, 0.47, 1.0], projection="3d")
 axt = fig.add_axes([0.635, 0.22, 0.35, 0.42])
+import csv  # noqa: E402
+CR = {r["case"]: r for r in csv.DictReader(open(os.path.join(ROOT, "inputs", "cases.csv")))}[case]
+fig.text(0.16, 0.93, f"AMB2022-03  case {case}:   P = {float(CR['power_W']):.0f} W,   v = {float(CR['speed_mm_s']):.0f} mm/s,   "
+         f"spot D4σ = {float(CR['spot_D4sigma_um']):.0f} µm", fontsize=16, fontweight="bold")
 h_t = fig.text(0.635, 0.86, "", fontsize=19, fontweight="bold")
 h_m = fig.text(0.635, 0.80, "", fontsize=13)
 mark3 = fig.text(0, 0, "▼", fontsize=26, ha="center", va="bottom", visible=False)
