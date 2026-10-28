@@ -20,9 +20,7 @@ out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(res, "thermo", "wall_ti
 PH = [("tangent assembly", "#2a77d4", ["kasm"]),
       ("residual + Newton linear solve", "#ee6a3a", ["bdry", "cap", "tie", "pard"]),
       ("laser source (nominal)", "#d6589b", ["src"]),
-      ("sensitivity solves", "#1db07c", ["fresh", "solve"]),
-      ("AD: laser-source derivatives", "#eba400", ["d", "e", "f"]),
-      ("AD: conduction, boundary, nodal", "#8a5fd1", ["a", "b", "c"]),
+      ("sensitivities (20 derivatives: AD terms + linear solves)", "#1db07c", ["a", "b", "c", "d", "e", "f", "fresh", "solve"]),
       ("other (I/O, probes, set-up)", "#b4b4b4", [])]
 
 
@@ -56,7 +54,7 @@ def stack(ax, x, v, scale, w=0.62):
     b = 0.0; tot = v.sum() * scale
     for (name, col, _), s in zip(PH, v * scale):
         ax.bar(x, s, w, bottom=b, color=col, ec="white", lw=1.5)
-        if s > 0.06 * ax.get_ylim()[1]:
+        if s > 0.045 * ax.get_ylim()[1]:
             ax.text(x, b + s / 2, f"{s:.0f}" if s >= 5 else f"{s:.1f}", ha="center", va="center", fontsize=10.5,
                     color="white" if col != "#b4b4b4" else "#333333")
         b += s
@@ -68,14 +66,15 @@ ax1.set_ylim(0, A_cpu["wall"] / 60 * 1.15)
 for x, c in [(0, A_cpu), (1, A_gpu)]:
     t = stack(ax1, x, c["ph"], 1 / 60)
     ax1.text(x, t + 1.2, f"{t:.0f} min", ha="center", fontsize=13, fontweight="bold")
-ax1.set_xticks([0, 1]); ax1.set_xticklabels(["CPU program", "GPU program"])
-ax1.set_ylabel("wall time [min]"); ax1.set_title(f"(a) same case on each program (case 0),\n     both measured: {A_cpu['wall'] / A_gpu['wall']:.1f}× faster", loc="left", fontsize=13)
+ax1.set_xticks([0, 1]); ax1.set_xticklabels(["CPU only\n(CPU program)", "CPU + GPU\n(GPU program)"])
+ax1.text(1, A_gpu["wall"] / 60 + 12, f"same case, same mesh,\nsame {A_cpu['steps']} time steps,\nsame 20 derivatives;\nonly the program differs",
+         ha="center", va="bottom", fontsize=11, color="#444444")
+ax1.set_ylabel("wall time [min]"); ax1.set_title(f"(a) one case (case 0) run once with each program,\n     both measured: {A_cpu['wall'] / A_gpu['wall']:.1f}× faster with the GPU", loc="left", fontsize=13)
 
 # (b) campaign, hours
 ax2.set_ylim(0, cpu_only.sum() / 3600 * 1.15)
 t0 = stack(ax2, 0, cpu_only, 1 / 3600); t1 = stack(ax2, 1.4, cpu_w, 1 / 3600); t2 = stack(ax2, 2.6, gpu_w, 1 / 3600)
 ax2.text(0, t0 + 0.2, f"{t0:.1f} h", ha="center", fontsize=13, fontweight="bold")
-ax2.text(1.4, t1 + 0.35, f"{t1:.1f} h", ha="center", fontsize=12)
 ax2.text(2.6, t2 + 0.2, f"{t2:.1f} h", ha="center", fontsize=12)
 wall = max(t1, t2)
 ax2.plot([1.0, 3.0], [wall, wall], color="k", lw=1.3, ls=(0, (4, 2)))
@@ -89,20 +88,19 @@ ax2.set_title("(b) 7-case campaign\n     (nominal T + 20 first derivatives each)
 for a in (ax1, ax2):
     for s in ("top", "right"): a.spines[s].set_visible(False)
     a.grid(axis="y", color="#e2e2e2", lw=0.8); a.set_axisbelow(True)
-fig.legend(handles=[Patch(color=c, label=n) for n, c, _ in PH], loc="upper center", bbox_to_anchor=(0.5, 1.1), ncol=4,
+fig.legend(handles=[Patch(color=c, label=n) for n, c, _ in PH], loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2,
            frameon=False, fontsize=12)
 note = (
-    "CPU worker: runs its cases one after the other with the CPU-only program (bin/thermal_in718_cpu), 6 threads on logical CPUs 12-17; "
-    "every phase runs on the CPU.\n"
-    "GPU worker: runs its cases one after the other with the GPU program (bin/thermal_in718_gpu), 12 threads on logical CPUs 0-11 + the "
-    "Quadro RTX 4000: tangent assembly, laser source and the\n"
-    "Enzyme derivative kernels run on the GPU; the linear solves (Newton: CG + BoomerAMG; sensitivities: Jacobi-BiCGSTAB) stay on the CPU. "
-    "Both workers take the next free case from the same list.\n"
-    "Xeon W-2265: 12 cores, 2 threads per core; logical CPUs 12-17 are the second threads of cores 0-5, which the GPU worker also used, "
-    "so the CPU worker ran on shared cores and the CPU times are pessimistic.\n"
-    f"CPU only in (b): {', '.join(c['case'] for c in gpu)} never ran on the CPU; their phase times are the per-step CPU phase times of the "
-    f"other cases x their steps. (a): the GPU case 0 is the video re-run (field dumps every 2 steps; inside 'other').\n"
-    "20 µm mesh (323,610 nodes), 5 µs steps; phase times from the per-step timers in run.log.")
+    "CPU program (bin/thermal_in718_cpu) = CPU only: every phase runs on the CPU cores.\n"
+    "GPU program (bin/thermal_in718_gpu) = CPU + GPU: tangent assembly, laser source and the Enzyme derivative kernels run on the Quadro RTX 4000 GPU; "
+    "the linear solves\n(Newton: CG + BoomerAMG; sensitivities: Jacobi-BiCGSTAB) stay on the CPU.  Same model, same equations and same results; "
+    "only where the work is done differs.\n"
+    "(a) case 0 run once with each program, both measured (the GPU run is the video re-run; its field dumps every 2 steps are inside 'other').\n"
+    "(b) the 7 cases were run by two workers at the same time, each taking the next free case from the list: CPU worker = CPU program, 6 threads "
+    "(logical CPUs 12-17);\nGPU worker = GPU program, 12 threads (logical CPUs 0-11) + the GPU.  CPU only = all 7 cases one after the other with the CPU "
+    f"program; {', '.join(c['case'] for c in gpu)} never ran on the CPU,\nso their times are estimated from the per-step CPU phase times of the other cases.  "
+    "Xeon W-2265, 12 cores x 2 threads: logical CPUs 12-17 are the second threads of cores 0-5,\nwhich the GPU worker also used, so the CPU times are "
+    "pessimistic.  20 µm mesh (323,610 nodes), 5 µs steps; phase times from the per-step timers in run.log.")
 fig.text(0.01, -0.075, note, ha="left", va="top", fontsize=10, color="#444444", linespacing=1.45)
 fig.savefig(out, dpi=170, bbox_inches="tight")
 print("written", out, f"| case 0: CPU {A_cpu['wall'] / 60:.1f} min, GPU {A_gpu['wall'] / 60:.1f} min | campaign: CPU only "
