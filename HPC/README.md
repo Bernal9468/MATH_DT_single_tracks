@@ -78,6 +78,7 @@ python3 tools/make_video.py results/video/case0               # -> video_case0.m
 python3 tools/make_video_3d.py results/video/case0            # -> video3d_case0.mp4: banded T [K], 3D block cut at y = 0 + top view, laser marker, clock
 python3 tools/join_videos.py                                  # -> results/video/video3d_all_cases.mp4: the 7 case videos one after the other
 python3 tools/make_video_plate.py                             # -> results/video/video_plate_all_tracks.mp4: the 21 tracks on the plate (NIST Fig. 3 layout)
+python3 tools/make_video_plate.py --cases                     # -> results/video/video_plate_7cases.mp4: one track per case (7 tracks)
 python3 tools/sensitivity_stack.py results/thermo/case0           # -> sensitivity_stack_case0.png: cumulative ranked dT/ds_p shares at the midpoint, with T(t)
 python3 tools/nist_temperature.py results/thermo/case0            # -> nist_temperature_case0.png: midpoint T(t), model vs NIST repeats + reported TAM/CRs; --full: whole history
 python3 tools/nist_temperature.py --all results/thermo          # -> nist_temperature_all.png: TAM and 3 cooling rates, model vs NIST, 7 cases

@@ -8,8 +8,10 @@ group Line 2.1_3 ... 3.2_3 (10 tracks), first line of the left group ~0.19 mm be
 Each track shows its own simulation (results/video/case<c>, dense dumps): the simulated window x0..x1 around the track
 midpoint (model x = 0 at the track midpoint, where the camera measured); the 3 repeats of a case share the simulation (the
 model is deterministic). The plate is back at ambient before each track (NIST: < 0.1 C rise per line scan).
+--cases: one track per case (0, 1.1, ... 3.2) instead of the 21 lines: 7 tracks on the right-group geometry (same pitch, length
+and x), a simplified layout (NIST placed the repeats of a case side by side), labelled by case.
 Panels: plate overview (top), the active track: top view and longitudinal section on the centreline (bottom).
-usage: make_video_plate.py [DIR] [--every 2] [--fps 30] [--out VIDEO.mp4] [--frame N --png FIG.png]
+usage: make_video_plate.py [DIR] [--cases] [--every 2] [--fps 30] [--out VIDEO.mp4] [--frame N --png FIG.png]
 """
 import argparse, csv, os, re, sys
 import numpy as np
@@ -45,8 +47,12 @@ HALF = PITCH / 2                                                # field drawn up
 
 ap = argparse.ArgumentParser(); ap.add_argument("dir", nargs="?", default=os.path.join(ROOT, "results", "video"))
 ap.add_argument("--every", type=int, default=2); ap.add_argument("--fps", type=int, default=30); ap.add_argument("--out")
-ap.add_argument("--frame", type=int); ap.add_argument("--png")
+ap.add_argument("--frame", type=int); ap.add_argument("--png"); ap.add_argument("--cases", action="store_true")
 a = ap.parse_args()
+LABEL = {n: n for n in POS}
+if a.cases:                                                     # one track per case, right-group geometry
+    ORDER = [f"{c}_1" for c in ("0", "1.1", "1.2", "2.1", "2.2", "3.1", "3.2")]
+    POS = {n: (X_RIGHT, -k * PITCH) for k, n in enumerate(ORDER)}; LABEL = {n: "case " + n.split("_")[0] for n in ORDER}
 CASES = {r["case"]: r for r in csv.DictReader(open(os.path.join(ROOT, "inputs", "cases.csv")))}
 
 
@@ -92,11 +98,13 @@ h_c = fig.text(0.07, 0.945, "", fontsize=15, fontweight="bold")
 h_t = fig.text(0.07, 0.905, "", fontsize=13, fontweight="bold")
 h_l = fig.text(0.30, 0.905, "", fontsize=13, fontweight="bold")
 h_m = fig.text(0.45, 0.905, "", fontsize=13)
-fig.text(0.98, 0.008, "AMB2022-03 plate layout (NIST challenge description, Fig. 3); simulated window around each track midpoint;\n"
-         "repeats share the simulation; tracks scanned in line order, plate back at ambient between tracks",
+fig.text(0.98, 0.008, ("one track per case on the AMB2022-03 track geometry (pitch, length: NIST challenge description, Fig. 3); "
+         "simulated window around each track midpoint;\nplate back at ambient between tracks" if a.cases else
+         "AMB2022-03 plate layout (NIST challenge description, Fig. 3); simulated window around each track midpoint;\n"
+         "repeats share the simulation; tracks scanned in line order, plate back at ambient between tracks"),
          fontsize=8, color="#555555", ha="right", va="bottom")
 ys = [p[1] for p in POS.values()]
-PX = (-1.0, X_RIGHT + L_TRACK + 1.0); PY = (min(ys) - 0.45, max(ys) + 0.45)
+PX = (min(p[0] for p in POS.values()) - 1.0, max(p[0] for p in POS.values()) + L_TRACK + 1.0); PY = (min(ys) - 0.45, max(ys) + 0.45)
 
 
 def style(ax, xl, yl):
@@ -123,13 +131,13 @@ def draw(f):
     if on: axp.scatter([xm + xl], [ys_ + 0.33], marker="v", s=70, color="black", zorder=6)
     for m, (x_, y_) in POS.items():
         side = (x_ - 0.1, "right") if x_ == 0.0 else (x_ + L_TRACK + 0.1, "left")
-        axp.text(side[0], y_, m, fontsize=7 if m == n else 6.5, va="center", ha=side[1], color="#ffd700" if m == n else "white",
+        axp.text(side[0], y_, LABEL[m], fontsize=7 if m == n else 6.5, va="center", ha=side[1], color="#ffd700" if m == n else "white",
                  fontweight="bold" if m == n else "normal", clip_on=False)
     axp.set_xlabel("x [mm]", fontsize=9); axp.set_ylabel("y [mm]", fontsize=9)
     # active track, top view and section
     axz.cla(); axz.contourf(u, w, Gt.T, levels=CLEV, colors=BANDS); style(axz, (u[0], u[-1]), (w[0], w[-1]))
     if on: axz.scatter([xl], [0.0], marker="v", s=140, color="black", zorder=5)
-    axz.set_title(f"Line {n}: top surface", fontsize=10, fontweight="bold"); axz.set_xlabel("x from track midpoint [mm]", fontsize=9)
+    axz.set_title(f"{'Line ' if not a.cases else ''}{LABEL[n]}: top surface", fontsize=10, fontweight="bold"); axz.set_xlabel("x from track midpoint [mm]", fontsize=9)
     axz.set_ylabel("y [mm]", fontsize=9)
     us, ws = R.sec.u[R.si], R.sec.w[R.sj]
     axs.cla(); axs.contourf(us, ws, Gs.T, levels=CLEV, colors=BANDS); style(axs, (us[0], us[-1]), (ws[0], ws[-1]))
@@ -138,15 +146,15 @@ def draw(f):
     axs.set_title("centreline section (black: liquidus 1609 K)", fontsize=10, fontweight="bold", pad=16)
     axs.set_xlabel("x from track midpoint [mm]", fontsize=9); axs.set_ylabel("z [mm]", fontsize=9)
     C = CASES[c]
-    h_c.set_text(f"Track {seq.index(n) + 1}/{len(seq)}:  Line {n}  (case {c}:  P = {float(C['power_W']):.0f} W,  "
-                 f"v = {float(C['speed_mm_s']):.0f} mm/s,  spot D4σ = {float(C['spot_D4sigma_um']):.0f} µm)")
+    pv = f"case {c}:  P = {float(C['power_W']):.0f} W,  v = {float(C['speed_mm_s']):.0f} mm/s,  spot D4σ = {float(C['spot_D4sigma_um']):.0f} µm"
+    h_c.set_text(f"Track {seq.index(n) + 1}/{len(seq)}:  " + (pv if a.cases else f"Line {n}  ({pv})"))
     h_t.set_text(rf"$t$ = {t * 1e3:.4f} ms"); h_l.set_text("Laser ON" if on else "Laser OFF"); h_l.set_color("#e00000" if on else "#666666")
     h_m.set_text(rf"$T_{{max}}$ (top surface) = {Gt.max():.0f} K")
 
 
 if a.frame is not None:
     draw(a.frame); fig.savefig(a.png or "frame.png", dpi=150); print("written", a.png or "frame.png"); sys.exit()
-out = a.out or os.path.join(a.dir, "video_plate_all_tracks.mp4")
+out = a.out or os.path.join(a.dir, "video_plate_7cases.mp4" if a.cases else "video_plate_all_tracks.mp4")
 wr = anim.FFMpegWriter(fps=a.fps, bitrate=8000, codec="libx264", extra_args=["-pix_fmt", "yuv420p"])
 with wr.saving(fig, out, dpi=150):
     for f in range(len(frames)):
