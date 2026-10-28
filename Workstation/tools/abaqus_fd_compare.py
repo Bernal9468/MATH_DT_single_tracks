@@ -71,7 +71,7 @@ def panel(xs, ad, fd, ax, lab, xl):
     ax.set_xlabel(xl)
 
 
-fig, axs = plt.subplots(2, 2, figsize=(13, 8.2), sharex=True); res = {}
+fig, axs = plt.subplots(2, 2, figsize=(13.6, 8.2), sharex=True, gridspec_kw={"wspace": 0.34}); res = {}
 for ax, (p, col, lab) in zip(axs.flat, PAR):
     ad = np.interp(times, tm, [float(r[col]) for r in rows]); fd = (prb[p + "_p"] - prb[p + "_m"]) / (2 * a.h)
     panel(np.array(times) * 1e3, ad, fd, ax, lab, "t [ms]" if ax in axs[1] else ""); res["probe " + p] = nrmse(ad, fd)
@@ -85,7 +85,7 @@ for tms in a.t:
     if t not in dumps or any(n not in D["nom"][t] for n in ln): print("no MFEM dump / Abaqus line output at", t); continue
     G, _ = F.read(dumps[t], [0, 1, 2, 3, 4], ln - 1)
     print(f"t = {t * 1e3:.3f} ms: nominal line T max |MFEM - Abaqus| = {np.max(np.abs(G[0] - np.array([D['nom'][t][n] for n in ln]))):.3f} K")
-    fig, axs = plt.subplots(2, 2, figsize=(13, 8.2), sharex=True)
+    fig, axs = plt.subplots(2, 2, figsize=(13.6, 8.2), sharex=True, gridspec_kw={"wspace": 0.34})
     for q, (ax, (p, col, lab)) in enumerate(zip(axs.flat, PAR)):
         fd = (np.array([D[p + "_p"][t][n] for n in ln]) - np.array([D[p + "_m"][t][n] for n in ln])) / (2 * a.h)
         panel(xs_, G[q + 1], fd, ax, lab, "x [mm]" if ax in axs[1] else ""); res[f"line {t * 1e3:.2f} ms {p}"] = nrmse(G[q + 1], fd)
