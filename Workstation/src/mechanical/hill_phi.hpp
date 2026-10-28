@@ -30,12 +30,25 @@ static const double Tt[NT] = HILL_VALS_Tt;
 #if defined(__CUDACC__)
 __constant__ double Tt_d[NT] = HILL_VALS_Tt;
 #endif
+#ifdef MATERIAL_IN718
+// MATH_DT (2026-10-28): IN718, Special Metals INCONEL alloy 718 datasheet SMC-045 (2007). E, nu: Table 4 (hot-rolled flat,
+// aged; dynamic) at 70, 200, 400, ..., 1600 F = the Tt grid. CTE: Table 5 mean linear expansion from 70 F (294.26 K) at
+// 200..1400 F, held at the 1400 F value above (table ends). Yield/hardening: Table 7 annealed (1750 F) hot-rolled round,
+// mean of 13 L/T tests: 0.2 % yield 433 MPa, UTS 831 MPa at 43 % elongation (AMB2022-03 plate: rolled + annealed sheet,
+// 800 C / 2 h stress relief), linear hardening, constant in T as in the IN625 deck; isotropic (wrought, no Hill ratios).
+#define HILL_VALS_Et {199948., 195811., 190295., 184090., 177885., 170990., 163406., 153753., 139274.}
+#else
 #define HILL_VALS_Et {207500., 204100., 197900., 191700., 185500., 178600., 170300., 160600., 147500.}
+#endif
 static const double Et[NT] = HILL_VALS_Et;
 #if defined(__CUDACC__)
 __constant__ double Et_d[NT] = HILL_VALS_Et;
 #endif
+#ifdef MATERIAL_IN718
+#define HILL_VALS_nut {0.294, 0.288, 0.280, 0.272, 0.271, 0.271, 0.283, 0.306, 0.331}
+#else
 #define HILL_VALS_nut {0.278, 0.28, 0.286, 0.29, 0.295, 0.305, 0.321, 0.34, 0.336}
+#endif
 static const double nut[NT] = HILL_VALS_nut;
 #if defined(__CUDACC__)
 __constant__ double nut_d[NT] = HILL_VALS_nut;
@@ -46,14 +59,24 @@ static const double Ta[NA] = HILL_VALS_Ta;
 #if defined(__CUDACC__)
 __constant__ double Ta_d[NA] = HILL_VALS_Ta;
 #endif
+#ifdef MATERIAL_IN718
+#define HILL_VALS_alphat {1.3158e-05, 1.3554e-05, 1.3932e-05, 1.4346e-05, 1.4562e-05, 1.5102e-05, 1.6038e-05, 1.6038e-05, 1.6038e-05}
+#else
 #define HILL_VALS_alphat {1.28e-05, 1.31e-05, 1.33e-05, 1.37e-05, 1.4e-05, 1.48e-05, 1.53e-05, 1.58e-05, 1.62e-05}
+#endif
 static const double alphat[NA] = HILL_VALS_alphat;
 #if defined(__CUDACC__)
 __constant__ double alphat_d[NA] = HILL_VALS_alphat;
 #endif
+#ifdef MATERIAL_IN718
+static constexpr double T_ref = 296.5, T_zero = 294.26;     // initial plate temperature (23.5 C, C2K = 273.0); CTE reference 70 F
+static constexpr double sigma_y0 = 433.0, sigma_y1 = 831.0, eps_p1 = 0.43;
+static constexpr double R11 = 1.0, R22 = 1.0, R33 = 1.0, R12 = 1.0, R13 = 1.0, R23 = 1.0;
+#else
 static constexpr double T_ref = 303.15, T_zero = 298.15;
 static constexpr double sigma_y0 = 725.0, sigma_y1 = 990.0, eps_p1 = 0.35;
 static constexpr double R11 = 1.0, R22 = 1.0, R33 = 0.8483, R12 = 1.0, R13 = 1.0, R23 = 1.0;
+#endif
 
 JET_HD inline void HillP(double P[6][6]) {
     double F = 0.5 * (1.0 / (R22 * R22) + 1.0 / (R33 * R33) - 1.0 / (R11 * R11));

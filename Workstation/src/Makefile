@@ -97,13 +97,13 @@ $(OBJ)/gpu_source_enzyme.o: src/gpu/gpu_source.cu src/gpu/gpu_source.h src/gpu/s
 	env -u CPATH "$(CLANGCU)" $(CLANGCU_FLAGS) -I$(TH) -c $< -o $@
 
 $(BIN)/mech_main_aa_src: src/mechanical/mech_main_aa.cpp $(wildcard src/mechanical/*.hpp)
-	$(CXX) $(CXXFLAGS) $(MKL_INC) $< -o $@ $(MKL_LIB) $(RPATH)
+	$(CXX) $(CXXFLAGS) $(MATFLAG) $(MKL_INC) $< -o $@ $(MKL_LIB) $(RPATH)
 
 $(BIN)/mech_main_aa_gpu: $(OBJ)/mech_main_aa_gpu.o $(OBJ)/cudss_backend.o
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(MKL_LIB) $(CUDA_LIB) $(RPATH)
 
 $(OBJ)/mech_main_aa_gpu.o: src/mechanical/mech_main_aa.cpp $(wildcard src/mechanical/*.hpp) src/gpu/mech_gpu.cuh src/gpu/solver_switch.h src/gpu/cudss_backend.h | $(OBJ)
-	$(NVCC) -x cu -O3 -std=c++17 $(NV_ARCH) -fmad=false -ccbin $(CXX) -Xcompiler -fopenmp -DUSE_GPU_MECH $(SWITCH) -Isrc/gpu $(MKL_INC) -c $< -o $@
+	$(NVCC) -x cu -O3 -std=c++17 $(NV_ARCH) -fmad=false -ccbin $(CXX) -Xcompiler -fopenmp -DUSE_GPU_MECH $(MATFLAG) $(SWITCH) -Isrc/gpu $(MKL_INC) -c $< -o $@
 
 $(OBJ)/fb_enzyme_kernels.o: $(TH)/fb_enzyme_kernels.cpp $(TH)/fb_enzyme_kernels.h $(TH)/fb_enzyme_fns.hpp $(TH)/src_kernel.hpp | $(OBJ)
 	env -u CPATH "$(CLANGCU)" -O2 -std=c++17 -fPIC -fno-exceptions -fplugin="$(ENZ_PLUG)" -DMFEM_USE_ENZYME $(MATFLAG) $(MFEM_INC) -I"$(PKG)/MFEM/include/mfem" -I$(TH) -c $< -o $@

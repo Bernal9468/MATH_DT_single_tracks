@@ -51,7 +51,11 @@ static vector<int> PROBELIST; static int PROBEEL = -1; static string PROBEFILE =
 static bool ABQANNEAL = false;   // -abqanneal: hot elements (T >= T_solidus) reset ONLY the plastic strain and hardening (Abaqus *ANNEAL TEMPERATURE semantics), the elastic strain is kept
 static bool ALLBULK = false;   // -bulk: every element is consolidated from the start (no soft stress-free powder phase) -> comparable with a standard FE code
 static bool IPTEMP = false;   // -iptemp: thermal strain from the nodal temperature interpolated to each integration point (default: element-average temperature)
+#ifdef MATERIAL_IN718
+static constexpr double T_SOLIDUS = 1533.15;  // reset temperature (IN718 solidus of the thermal model, material_in718.hpp); not differentiated
+#else
 static constexpr double T_SOLIDUS = 1563.0;   // reset temperature (IN625 solidus of the thermal model); not differentiated
+#endif
 static const bool JET2_ALWAYS = std::getenv("MECH_JET2") != nullptr;   // MECH_JET2=1: order 1 also uses Jet<8,2> (the shipped behaviour)
 static double FSOFT = 1e-3, NTOL = 1e-10;                  // stiffness factor of unconsolidated powder
 static double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }

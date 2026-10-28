@@ -46,6 +46,10 @@ python3 post/analyze_case.py results/thermo/case0 --json results/thermo/case0/re
 python3 tools/compare_thermography.py results/thermo/case0; python3 tools/sensitivity_report.py results/thermo/case0
 python3 tools/thermo_summary.py                          # all cases: summary.csv, derivatives_all.csv, summary_thermo.png
 python3 tools/cost_figure.py                             # -> results/thermo/wall_time_cpu_vs_gpu.png: wall time by solver phase, CPU vs GPU program and 7-case campaign
+# mechanical stage (residual stress, IN718 from the Special Metals SMC-045 datasheet, + 20 first derivatives), one track, CPU vs GPU:
+#   make -C src mech mech_gpu MATERIAL=IN718 OBJ=../build_mech BIN=../bin_mech
+#   MESH=$PWD/mesh/track_h0.04_x-0.6_1.5.mesh DUMP=<thermal fields dir of a DORDER=1 run> bash run/run_mech.sh gpu|cpu 0 results/mech/case0_h40_gpu|cpu
+python3 tools/cost_figure_mech.py                       # -> results/mech/wall_time_mech_cpu_vs_gpu.png (the 20 um mesh needs ~14 GB on the GPU: 40 um)
 python3 tools/fields_figure.py results/thermo/case0           # nominal T field + 12 derivative fields (section y = 0)
 # video (needs dense dumps: FIELD_DUMP_EVERY=2 FIELD_DUMP_EVERY2=2, ~15 GB per case; python3 -m pip install --user imageio-ffmpeg):
 python3 tools/make_video.py results/video/case0               # -> video_case0.mp4: NIST camera, model, derivatives, history
