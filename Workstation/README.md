@@ -47,7 +47,10 @@ python3 tools/compare_thermography.py results/thermo/case0; python3 tools/sensit
 python3 tools/thermo_summary.py                          # all cases: summary.csv, derivatives_all.csv, summary_thermo.png
 python3 tools/cost_figure.py                             # -> results/thermo/wall_time_cpu_vs_gpu.png: wall time by solver phase, CPU vs GPU program and 7-case campaign
 # mechanical stage (residual stress, IN718 from the Special Metals SMC-045 datasheet, + 20 first derivatives), one track, CPU vs GPU:
-#   make -C src mech mech_gpu MATERIAL=IN718 OBJ=../build_mech BIN=../bin_mech
+#   make -f src/Makefile mech mech_gpu MATERIAL=IN718 OBJ=build_mech BIN=bin_mech
+#   (outside the original tree also pass PKG=<bare_plate_tutorial dir> CUDA12=<toolchain/cuda12/nvidia dir>)
+#   run_mech.sh passes -abqanneal (Abaqus *ANNEAL TEMPERATURE semantics) and element-mean temperatures (no -iptemp),
+#   as the Abaqus C3D8 replica below
 #   MESH=$PWD/mesh/track_h0.04_x-0.6_1.5.mesh DUMP=<thermal fields dir of a DORDER=1 run> bash run/run_mech.sh gpu|cpu 0 results/mech/case0_h40_gpu|cpu
 python3 tools/cost_figure_mech.py                       # -> results/mech/wall_time_mech_cpu_vs_gpu.png (the 20 um mesh needs ~14 GB on the GPU: 40 um)
 python3 tools/fields_figure.py results/thermo/case0           # nominal T field + 12 derivative fields (section y = 0)
@@ -68,6 +71,18 @@ SRC_DUMP_DIR=$PWD/results/abaqus_fd/mfem FIELD_DUMP_DIR=$PWD/results/abaqus_fd/m
 JOBS=5 CPUS=3 bash run/abaqus_fd.sh results/abaqus_fd/mfem results/abaqus_fd/fd 0.01                       # 9 Abaqus jobs, ~7.5 h
 python3 tools/abaqus_fd_compare.py results/abaqus_fd/mfem results/abaqus_fd/fd --t 0.75 1.5 2.4          # -> abaqus_fd_probe.png, abaqus_fd_line_t*.png
 /usr/bin/python3 tools/geometry_figure.py results/abaqus_fd/mfem                                         # -> results/abaqus_fd/geometry.png: plate, mesh, BCs, laser path, probe (needs mplot3d)
+# mechanical derivatives vs Abaqus finite differences: thermal FD jobs with nodal temperatures in the odb, the C3D8
+# mechanical replica on each of them (tools/abaqus_mech_deck.py), and the MFEM mechanical run on the 59 centreline elements
+# of mesh/line_elems_h40.txt. Use relative steps of 0.003 or 0.001: at 0.01 the anneal history changes between the + and -
+# runs and the central difference is not a derivative (cp at 0.70 ms: +109.8 at 0.01, -5.29 at 0.001, MFEM AD -5.24)
+DECK_ARGS="--nt-every 10" JOBS=5 CPUS=3 bash run/abaqus_fd.sh results/abaqus_fd/mfem results/abaqus_fd/fd_nt 0.001
+JOBS=3 CPUS=4 bash run/abaqus_mech_fd.sh results/abaqus_fd/fd_nt results/abaqus_mech $PWD/mesh/track_h0.04_x-0.6_1.5.mesh mesh/line_elems_h40.txt 10
+MESH=$PWD/mesh/track_h0.04_x-0.6_1.5.mesh DUMP=$PWD/results/abaqus_fd/mfem/fields \
+    bash run/run_mech.sh gpu 0 results/mech/case0_h40_abqmatch -probeelem $(cat mesh/line_elems_h40.txt)
+python3 tools/abaqus_mech_fd_compare.py results/mech/case0_h40_abqmatch results/abaqus_mech mesh/line_elems_h40.txt 92389 --h 0.001 \
+    --out results/mech/case0_h40_abqmatch/verification                                                 # -> abaqus_mech_fd_*.png, *_values.csv, *_summary.json
+# anneal-history audit (which elements cross the anneal temperature differently in the FD runs):
+#   abaqus python tools/abaqus_anneal_audit.py mesh/track_h0.04_x-0.6_1.5.mesh results/abaqus_fd/fd_nt results/abaqus_fd/mfem/fields results/anneal_audit
 ```
 
 Per case (`results/thermo/case<c>/`): `thermography_case<c>.png` - NIST camera frame vs model surface field (same colour

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Abaqus/Standard replica of one MFEM single-track run, for finite-difference checks of the AD derivatives.
 
-Same mesh (DC3D8, node n = MFEM vertex n-1), same IN718 tables (bare_plate_single_layer/src/thermal/material_in718.hpp),
+Same mesh (DC3D8, node n = MFEM vertex n-1), same IN718 tables (src/thermal/material_in718.hpp),
 same boundary conditions (film h + radiation eps on every boundary face, bottom face held at T_sub), same time grid (fixed
 increments dt), and the SAME laser load: the nodal source vector MFEM assembled in every step (SRC_DUMP_DIR -> fsrc.bin),
 applied as *CFLUX in one Abaqus step per MFEM step (AMPLITUDE=STEP: the load is constant over the increment).
@@ -18,7 +18,10 @@ import numpy as np
 ap = argparse.ArgumentParser(); ap.add_argument("run"); ap.add_argument("out")
 for p in ("sk", "scp", "srho", "sl"): ap.add_argument("--" + p, type=float, default=1.0)
 ap.add_argument("--nsub", type=int, default=40); ap.add_argument("--line-every", type=int, default=10)
+ap.add_argument("--nt-every", type=int, default=0, help="NT field output (odb) every N steps, for the mechanical replica")
+ap.add_argument("--max-steps", type=int, help="stop after this thermal step for a prefix convergence study")
 a = ap.parse_args()
+if a.max_steps is not None and a.max_steps < 1: ap.error("--max-steps must be positive")
 
 # ---- run settings (settings.txt, run.log)
 st = open(os.path.join(a.run, "settings.txt")).read(); log = open(os.path.join(a.run, "run.log")).read()
@@ -64,6 +67,8 @@ while off < len(raw):
     te, nz = struct.unpack_from("<dq", raw, off); off += 16
     d = np.frombuffer(raw, dtype=[("i", "<i8"), ("v", "<f8")], count=nz, offset=off); off += 16 * nz
     if abs(te / dt - round(te / dt)) < 1e-6: rec[round(te / dt)] = d   # the final partial step (t_final off the grid) is dropped
+if a.max_steps is not None:
+    rec = {k: v for k, v in rec.items() if k <= a.max_steps}
 steps = sorted(rec); nstep = steps[-1]
 if steps != list(range(1, nstep + 1)):
     sys.exit("source records are not on the fixed time grid (step cuts?)")
@@ -109,7 +114,9 @@ for k in steps:
     if k == 1:
         w.write(f"*BOUNDARY\nBOTTOM, 11, 11, {T_sub}\n")
         w.write(f"*SFILM\nOUTER, F, {T_amb}, {h_conv}\n*SRADIATE\nOUTER, R, {T_amb}, {eps}\n")
-        w.write("*OUTPUT, FIELD, FREQUENCY=0\n*NODE OUTPUT\nNT\n")
+        if not a.nt_every: w.write("*OUTPUT, FIELD, FREQUENCY=0\n*NODE OUTPUT\nNT\n")
+    if a.nt_every:                                       # temperatures for the mechanical replica (abaqus_mech_deck.py)
+        w.write(f"*OUTPUT, FIELD, FREQUENCY={1 if k % a.nt_every == 0 or k == nstep else 0}\n*NODE OUTPUT\nNT\n")
     w.write("*CFLUX, OP=NEW\n")
     loads = [(int(i_) + 1, float(v_)) for i_, v_ in zip(rec[k]["i"], rec[k]["v"])] or [(1, 0.0)]
     for n, v in loads: w.write(f"{n}, 11, {v:.15g}\n")

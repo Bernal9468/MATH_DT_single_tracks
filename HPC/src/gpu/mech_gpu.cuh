@@ -53,7 +53,7 @@ __device__ inline long kpos_d(const long *ia, const long *ja, long r, long c) { 
 //  k_asm_ip: one thread per integration point -- return map (Jet<8,1>), stress and C*B (C = consistent tangent)
 //  k_asm_el: one thread per (element, row d1) -- fe[d1] and the stiffness row Ke[d1][:], summed over the 8 points in the
 //            CPU's order (q, then i), then scattered through the tie map into rfull and K.a
-__global__ void k_asm_ip(Dev d, bool want_K, double fsoft) {
+__global__ void k_asm_ip(Dev d, bool want_K, double fsoft, bool abqanneal = false) {
     const long ip = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (ip >= d.nip) return;
     const int e = (int)(ip / 8);
@@ -63,7 +63,7 @@ __global__ void k_asm_ip(Dev d, bool want_K, double fsoft) {
     J81g wv[8];
     for (int i = 0; i < 6; i++) { double eps = 0; for (int dd = 0; dd < 24; dd++) eps += B[i * 24 + dd] * ue[dd]; wv[i] = J81g::var(eps - d.Ss[ip * 7 + i], i); }
     wv[6] = J81g::var(d.ipT[ip], 6); wv[7] = J81g::var(d.Ss[ip * 7 + 6], 7);
-    J81g sg[6], dep[6], da; hill::phi_w<J81g>(wv, gsc, sg, dep, da);
+    J81g sg[6], dep[6], da; hill::phi_w<J81g>(wv, gsc, sg, dep, da, abqanneal);
     for (int i = 0; i < 6; i++) d.sgv[ip * 6 + i] = sg[i].v;
     if (want_K) {
         double *CB = &d.CB[ip * 144];
@@ -93,7 +93,7 @@ __global__ void k_asm_el(Dev d, bool want_K) {
             } } }
 }
 // (single-kernel version, one thread per element; kept for reference, slower: 2524 threads with a 24x24 local matrix)
-__global__ void k_asm(Dev d, bool want_K, double fsoft) {
+__global__ void k_asm(Dev d, bool want_K, double fsoft, bool abqanneal = false) {
     const int e = blockIdx.x * blockDim.x + threadIdx.x;
     if (e >= d.ne) return;
     double ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = d.ufull[3 * (size_t)d.E[e * 8 + a] + c];
@@ -105,7 +105,7 @@ __global__ void k_asm(Dev d, bool want_K, double fsoft) {
         J81g wv[8];
         for (int i = 0; i < 6; i++) { double eps = 0; for (int dd = 0; dd < 24; dd++) eps += B[i * 24 + dd] * ue[dd]; wv[i] = J81g::var(eps - d.Ss[ip * 7 + i], i); }
         wv[6] = J81g::var(d.ipT[ip], 6); wv[7] = J81g::var(d.Ss[ip * 7 + 6], 7);
-        J81g sg[6], dep[6], da; hill::phi_w<J81g>(wv, gsc, sg, dep, da);
+        J81g sg[6], dep[6], da; hill::phi_w<J81g>(wv, gsc, sg, dep, da, abqanneal);
         for (int i = 0; i < 6; i++) for (int dd = 0; dd < 24; dd++) fe[dd] += w * B[i * 24 + dd] * sg[i].v;
         if (want_K) {
             double C[6][6]; for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) C[i][j] = sg[i].g[j];
@@ -135,14 +135,14 @@ __global__ void k_jets(Dev d, double fsoft, bool abqanneal) {
     double ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = d.ufull[3 * (size_t)d.E[e * 8 + a] + c];
     const double gsc = d.powder[e] ? fsoft : 1.0;
     const bool reset = (d.hot[e] && !abqanneal) || d.powder[e];
-    const bool aa = abqanneal && d.hot[e] && !d.powder[e];
+    const bool aa = abqanneal && hill::annealed(d.ipT[ip]) && !d.powder[e];
     double e0; { Jet<1, 2> t = Jet<1, 2>::var(d.ipT[ip], 0); auto r = hill::thermal_strain<Jet<1, 2>>(t); e0 = r.v; }
     const double *B = &d.Bb[ip * 144];
     double eps[6]; for (int i = 0; i < 6; i++) { double s = 0; for (int dd = 0; dd < 24; dd++) s += B[i * 24 + dd] * ue[dd]; eps[i] = s; }
     const double *Sp = &d.Ss[ip * 7];
     double wv[8]; for (int i = 0; i < 6; i++) wv[i] = eps[i] - Sp[i]; wv[6] = d.ipT[ip]; wv[7] = Sp[6];
     J81g wj[8]; for (int i = 0; i < 8; i++) wj[i] = J81g::var(wv[i], i);
-    J81g sj[6], dj[6], daj; hill::phi_w<J81g>(wj, gsc, sj, dj, daj);
+    J81g sj[6], dj[6], daj; hill::phi_w<J81g>(wj, gsc, sj, dj, daj, abqanneal);
     double *F = &d.F[ip * 13], *G = &d.Gm[ip * 104];
     for (int i = 0; i < 6; i++) { F[i] = sj[i].v; F[6 + i] = dj[i].v; for (int k = 0; k < 8; k++) { G[i * 8 + k] = sj[i].g[k]; G[(6 + i) * 8 + k] = dj[i].g[k]; } }
     F[12] = daj.v; for (int k = 0; k < 8; k++) G[12 * 8 + k] = daj.g[k];
@@ -182,7 +182,7 @@ template <int P> __global__ void k_dupd(Dev d, bool abqanneal) {
     if (t >= d.nip * P) return;
     const long ip = t / P; const int i = (int)(t % P); const int e = (int)(ip / 8);
     const bool reset = (d.hot[e] && !abqanneal) || d.powder[e];
-    const bool aa = abqanneal && d.hot[e] && !d.powder[e];
+    const bool aa = abqanneal && hill::annealed(d.ipT[ip]) && !d.powder[e];
     double e1; { Jet<1, 2> tt = Jet<1, 2>::var(d.ipT[ip], 0); auto r = hill::thermal_strain<Jet<1, 2>>(tt); e1 = r.g[0]; }
     const double *G = &d.Gm[ip * 104]; const double *B = &d.Bb[ip * 144];
     double deps[6], ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = d.du1f[(size_t)i * 3 * d.nv + 3 * (size_t)d.E[e * 8 + a] + c];
@@ -213,14 +213,14 @@ __global__ void k_jets2(Dev d, double fsoft, bool abqanneal) {
     double ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = d.ufull[3 * (size_t)d.E[e * 8 + a] + c];
     const double gsc = d.powder[e] ? fsoft : 1.0;
     const bool reset = (d.hot[e] && !abqanneal) || d.powder[e];
-    const bool aa = abqanneal && d.hot[e] && !d.powder[e];
+    const bool aa = abqanneal && hill::annealed(d.ipT[ip]) && !d.powder[e];
     double e0; { Jet<1, 2> t = Jet<1, 2>::var(d.ipT[ip], 0); auto r = hill::thermal_strain<Jet<1, 2>>(t); e0 = r.v; }
     const double *B = &d.Bb[ip * 144];
     double eps[6]; for (int i = 0; i < 6; i++) { double s = 0; for (int dd = 0; dd < 24; dd++) s += B[i * 24 + dd] * ue[dd]; eps[i] = s; }
     const double *Sp = &d.Ss[ip * 7];
     double wv[8]; for (int i = 0; i < 6; i++) wv[i] = eps[i] - Sp[i]; wv[6] = d.ipT[ip]; wv[7] = Sp[6];
     J82g wj[8]; for (int i = 0; i < 8; i++) wj[i] = J82g::var(wv[i], i);
-    J82g sj[6], dj[6], daj; hill::phi_w<J82g>(wj, gsc, sj, dj, daj);
+    J82g sj[6], dj[6], daj; hill::phi_w<J82g>(wj, gsc, sj, dj, daj, abqanneal);
     double *F = &d.F[ip * 13], *G = &d.Gm[ip * 104], *H = &d.H[ip * 468];
     for (int i = 0; i < 6; i++) { F[i] = sj[i].v; F[6 + i] = dj[i].v;
         for (int k = 0; k < 8; k++) { G[i * 8 + k] = sj[i].g[k]; G[(6 + i) * 8 + k] = dj[i].g[k]; }
@@ -260,7 +260,7 @@ template <int P, int NP2> __global__ void k_dupd2(Dev d, bool abqanneal) {
     if (t >= d.nip * NP2) return;
     const long ip = t / NP2; const int pr = (int)(t % NP2), i = c_pi[pr], j = c_pj[pr]; const int e = (int)(ip / 8);
     const bool reset = (d.hot[e] && !abqanneal) || d.powder[e];
-    const bool aa = abqanneal && d.hot[e] && !d.powder[e];
+    const bool aa = abqanneal && hill::annealed(d.ipT[ip]) && !d.powder[e];
     double e1, e2; { Jet<1, 2> tt = Jet<1, 2>::var(d.ipT[ip], 0); auto r = hill::thermal_strain<Jet<1, 2>>(tt); e1 = r.g[0]; e2 = r.h[0]; }
     const double *G = &d.Gm[ip * 104], *H = &d.H[ip * 468]; const double *B = &d.Bb[ip * 144]; const double *dwb = &d.dw1[ip * P * 8];
     double ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = d.du2f[(size_t)pr * 3 * d.nv + 3 * (size_t)d.E[e * 8 + a] + c];

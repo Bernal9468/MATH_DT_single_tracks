@@ -109,6 +109,23 @@ template <class S> JET_HD inline S yield_of(const S &a) {
     return val(s) > sigma_y1 ? S(sigma_y1) : s;
 }
 
+// Match the Abaqus replica's *PLASTIC rows: full hardening below Ta-1,
+// linear reduction over the last kelvin, perfect plasticity at/above Ta.
+#ifdef MATERIAL_IN718
+static constexpr double anneal_temperature = 1533.15;
+#else
+static constexpr double anneal_temperature = 1563.0;
+#endif
+JET_HD inline bool annealed(double T) { return T >= anneal_temperature; }
+template <class S> JET_HD inline S hardening_scale(const S &T, bool abqanneal) {
+    if (!abqanneal || val(T) <= anneal_temperature - 1.0) return S(1.0);
+    if (annealed(val(T))) return S(0.0);
+    return anneal_temperature - T;
+}
+template <class S> JET_HD inline S scaled_yield(const S &a, const S &hscale) {
+    return sigma_y0 + hscale * (yield_of(a) - sigma_y0);
+}
+
 template <class S> JET_HD inline void solve6(S A[6][6], const S b[6], S x[6]) {
     S M[6][7];
     for (int i = 0; i < 6; i++) { for (int j = 0; j < 6; j++) M[i][j] = A[i][j]; M[i][6] = b[i]; }
@@ -134,19 +151,19 @@ template <class S> JET_HD inline S quad6(const S s[6], const double P[6][6], S P
 }
 
 // g(b) = se(sigma(b)) - yield(alpha_old + b*se),  sigma(b) = (I + b M)^-1 sigma_trial
-template <class S> JET_HD inline S g_of(const S &b, S M[6][6], const S sig_tr[6], const double P[6][6], const S &alpha_old, S sig_out[6], S &se_out) {
+template <class S> JET_HD inline S g_of(const S &b, S M[6][6], const S sig_tr[6], const double P[6][6], const S &alpha_old, S sig_out[6], S &se_out, const S &hscale = S(1.0)) {
     S A[6][6];
     for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) A[i][j] = M[i][j] * b + (i == j ? 1.0 : 0.0);
     solve6(A, sig_tr, sig_out);
     S Ps[6]; S q = quad6(sig_out, P, Ps);
     se_out = val(q) > 0.0 ? jsqrt(q) : S(0.0);
-    return se_out - yield_of(alpha_old + b * se_out);
+    return se_out - scaled_yield(alpha_old + b * se_out, hscale);
 }
 
 // Core map in the 8 variables w = (e[6] = eps_bbar - epsp_old (Mandel), T, alpha_old):
 //   sigma(w), delta_epsp(w) (plastic strain increment, Mandel), delta_alpha(w)
 static constexpr int NW8 = 8;
-template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig[6], S dep[6], S &dalpha) {
+template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig[6], S dep[6], S &dalpha, bool abqanneal = false) {
     double P[6][6]; HillP(P);
     const S &T = w[6];
     S E = pw(HILL_TBL(Tt), HILL_TBL(Et), NT, T), nu = pw(HILL_TBL(Tt), HILL_TBL(nut), NT, T);
@@ -163,8 +180,9 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
     S eel[6], sig_tr[6];
     for (int i = 0; i < 6; i++) eel[i] = w[i] - (i < 3 ? eth : S(0.0));
     for (int i = 0; i < 6; i++) { S a(0.0); for (int j = 0; j < 6; j++) a += C[i][j] * eel[j]; sig_tr[i] = a; }
-    const S &alpha_old = w[7];
-    S sy_old = yield_of(alpha_old);
+    const S alpha_old = (abqanneal && annealed(val(T))) ? S(0.0) : w[7];
+    const S hscale = hardening_scale(T, abqanneal);
+    S sy_old = scaled_yield(alpha_old, hscale);
     S Ps[6]; S qtr = quad6(sig_tr, P, Ps);
     const double se_tr = val(qtr) > 0.0 ? std::sqrt(val(qtr)) : 0.0;
 
@@ -174,14 +192,14 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
         // real-part solve: safeguarded Newton with a 1-variable dual number (exact dg/db), then G0 = dg/db at the root
         typedef Jet<1, 1> D1;
         D1 Mj[6][6], strj[6]; for (int i = 0; i < 6; i++) { strj[i] = D1(val(sig_tr[i])); for (int j = 0; j < 6; j++) Mj[i][j] = D1(val(M[i][j])); }
-        D1 a0j(val(alpha_old)), sej, svj[6];
+        D1 a0j(val(alpha_old)), hsj(val(hscale)), sej, svj[6];
         double b = 0.0, G0 = 1.0;
         {   // bracket [lo,hi], g(lo)>0>g(hi); g is smooth and decreasing in b
             double lo = 0.0, hi = 1e-6;
-            for (int k = 0; k < 200; k++) { D1 gh = g_of<D1>(D1::var(hi, 0), Mj, strj, P, a0j, svj, sej); if (gh.v < 0.0) break; lo = hi; hi *= 2.0; }
+            for (int k = 0; k < 200; k++) { D1 gh = g_of<D1>(D1::var(hi, 0), Mj, strj, P, a0j, svj, sej, hsj); if (gh.v < 0.0) break; lo = hi; hi *= 2.0; }
             b = 0.5 * (lo + hi);
             for (int it = 0; it < 200; it++) {
-                D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej);
+                D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej, hsj);
                 G0 = gj.g[0];
                 if (std::fabs(gj.v) < 1e-13 * (val(sy_old) > 1.0 ? val(sy_old) : 1.0)) break;
                 if (gj.v > 0.0) lo = b; else hi = b;
@@ -191,14 +209,14 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
                 b = bn;
             }
         }
-        { D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej); G0 = gj.g[0]; }
+        { D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej, hsj); G0 = gj.g[0]; }
         S bj(b), se_j, sg[6];
         constexpr int NIT = std::is_same<S, double>::value ? 1 : 3;
         for (int it = 0; it < NIT; it++) {
-            S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j);
+            S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j, hscale);
             bj = bj - gj * (1.0 / G0);
         }
-        S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j);   // sigma(beta), se(beta) at the refined beta
+        S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j, hscale);   // sigma(beta), se(beta) at the refined beta
         S dgam = bj * se_j;
         for (int i = 0; i < 6; i++) sig[i] = sg[i];
         dalpha = dgam;

@@ -48,7 +48,7 @@ static const char *kName[P] = {"k","cp","rho","Lfus","Ts","Tliq","hc","T0","P","
 static bool FREEZEHOT = false;   // -freezehot: in -pert (finite-difference) runs the hot/consolidated decisions use the UNPERTURBED temperature (the derivative of the continuous problem, as AD computes)
 static bool FULLINT = false;   // -fullint: standard 2x2x2 full-integration strains (no B-bar centroid dilatation)
 static vector<int> PROBELIST; static int PROBEEL = -1; static string PROBEFILE = "probe_elem_hist.csv";   // -probeelem E: per-step element-mean stress, d1 and diagonal d2 of that element
-static bool ABQANNEAL = false;   // -abqanneal: hot elements (T >= T_solidus) reset ONLY the plastic strain and hardening (Abaqus *ANNEAL TEMPERATURE semantics), the elastic strain is kept
+static bool ABQANNEAL = false;   // -abqanneal: hot integration points reset ONLY hardening (Abaqus *ANNEAL TEMPERATURE semantics), the elastic strain is kept
 static bool ALLBULK = false;   // -bulk: every element is consolidated from the start (no soft stress-free powder phase) -> comparable with a standard FE code
 static bool IPTEMP = false;   // -iptemp: thermal strain from the nodal temperature interpolated to each integration point (default: element-average temperature)
 #ifdef MATERIAL_IN718
@@ -249,6 +249,8 @@ struct State {   // per-IP plastic state and its derivatives (old = at start of 
 
 int main(int argc, char **argv) {
     string meshf = "plate.mesh", tief = "tie_weights.txt", dumpdir, outdir = ".";
+    const char *vm_env = std::getenv("MECH_VM_DUMP_DIR");
+    const string vm_dumpdir = vm_env ? vm_env : "";
     int order = 2, pertorder = 0, maxsteps = 1 << 30, probe_node = -1; bool fd_mode = false; vector<std::pair<int, double>> pert;
     for (int i = 1; i < argc; i++) {
         string a = argv[i];
@@ -260,6 +262,7 @@ int main(int argc, char **argv) {
     if (fd_mode) order = pertorder;
     { int k = 0; for (int r = 0; r < P; r++) for (int c2 = r; c2 < P; c2++, k++) { g_pi[k] = r; g_pj[k] = c2; } }
     printf("mech: order=%d threads=%d\n", order, omp_get_max_threads());
+    printf("temperature=%s abqanneal=%d (perfect plasticity at/above %.2f K)\n", IPTEMP ? "integration-point interpolation" : "element mean", ABQANNEAL, hill::anneal_temperature);
     Mesh m = read_mesh(meshf); printf("mesh: %d elements %d nodes\n", m.ne, m.nv);
     Red R = build_red(m, tief); const int nf3 = 3 * R.nfree; printf("reduced nodes %d (dofs %d)\n", R.nfree, nf3);
     Geo G = build_geo(m);
@@ -298,7 +301,7 @@ int main(int argc, char **argv) {
 
     const long NIP = (long)m.ne * 8;
     State S; S.s.assign(NIP * 7, 0.0); if (order >= 1) S.ds1.assign(NIP * P * 7, 0.0); if (order >= 2) S.ds2.assign(NIP * (size_t)NP2 * 7, 0.0);
-    State S0;   // state right after the initial (stress-free) step: the Abaqus-style anneal returns hot points to it (plastic strain 0, initial-temperature thermal-strain reference kept)
+    State S0;   // initial state (plastic strain is retained during Abaqus-style annealing)
     State N_; N_.s.assign(NIP * 7, 0.0); if (order >= 1) N_.ds1.assign(NIP * P * 7, 0.0); if (order >= 2) N_.ds2.assign(NIP * (size_t)NP2 * 7, 0.0);
     vector<char> consolidated(m.ne, ALLBULK ? 1 : 0);
     vector<double> ufull(3 * (size_t)m.nv, 0.0), ufree(nf3, 0.0), ufree_last(nf3, 0.0);
@@ -406,6 +409,17 @@ int main(int argc, char **argv) {
         vector<double> eTf(eT); if (!smp.Tflag.empty()) for (int e = 0; e < m.ne; e++) { double s = 0; for (int a = 0; a < 8; a++) s += smp.Tflag[m.E[e][a]]; eTf[e] = s / 8.0; }
         vector<char> hot(m.ne), powder(m.ne);
         for (int e = 0; e < m.ne; e++) { hot[e] = eTf[e] >= T_SOLIDUS; powder[e] = (m.attr[e] == 2) && !consolidated[e]; }
+        // FD validation may hold the discrete annealing history at the nominal
+        // temperature while perturbing the continuous constitutive inputs.
+        auto anneal_at = [&](int e, int q, size_t ip) {
+            if (smp.Tflag.empty()) return hill::annealed(ipT[ip]);
+            if (!IPTEMP) return hill::annealed(eTf[e]);
+            const double gp = 1.0 / std::sqrt(3.0);
+            double N[8], dN[8][3];
+            hex_shape((q & 1) ? gp : -gp, (q & 2) ? gp : -gp, (q & 4) ? gp : -gp, N, dN);
+            double T = 0.0; for (int a = 0; a < 8; a++) T += N[a] * smp.Tflag[m.E[e][a]];
+            return hill::annealed(T);
+        };
         const bool gstep = gpu && !init_step;   // this step runs its element/point loops on the GPU
 #ifdef USE_GPU_MECH
         if (gstep) { mgpu::up(D.ipT, ipT.data(), ipT.size()); mgpu::up(D.ipdT, ipdT.data(), ipdT.size());
@@ -425,7 +439,7 @@ int main(int argc, char **argv) {
                 up(D.ufull, uf.data(), uf.size());
                 MCK(cudaMemset(D.rfull, 0, sizeof(double) * 3 * nv)); MCK(cudaMemset(D.fsum, 0, sizeof(double)));
                 if (want_K) MCK(cudaMemset(D.Ka, 0, sizeof(double) * D.nnz));
-                k_asm_ip<<<nb(NIP, 64), 64>>>(D, want_K, FSOFT); k_asm_el<<<nb((long)m.ne * 24, 64), 64>>>(D, want_K); MCK(cudaGetLastError());
+                k_asm_ip<<<nb(NIP, 64), 64>>>(D, want_K, FSOFT, ABQANNEAL); k_asm_el<<<nb((long)m.ne * 24, 64), 64>>>(D, want_K); MCK(cudaGetLastError());
                 down(rfull.data(), D.rfull, rfull.size()); down(&fsum, D.fsum, 1);
                 if (want_K) down(K.a.data(), D.Ka, K.a.size());
             } else
@@ -441,7 +455,7 @@ int main(int argc, char **argv) {
                     J81 wv[8];
                     for (int i = 0; i < 6; i++) { double eps = 0; for (int d = 0; d < 24; d++) eps += B[i * 24 + d] * ue[d]; wv[i] = J81::var(eps - S.s[ip * 7 + i], i); }
                     wv[6] = J81::var(ipT[ip], 6); wv[7] = J81::var(S.s[ip * 7 + 6], 7);
-                    J81 sg[6], dep[6], da; hill::phi_w<J81>(wv, gsc, sg, dep, da);
+                    J81 sg[6], dep[6], da; hill::phi_w<J81>(wv, gsc, sg, dep, da, ABQANNEAL);
                     for (int i = 0; i < 6; i++) for (int d = 0; d < 24; d++) fe[d] += w * B[i * 24 + d] * sg[i].v;
                     if (want_K) {
                         double C[6][6]; for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) C[i][j] = sg[i].g[j];
@@ -531,17 +545,17 @@ int main(int argc, char **argv) {
         #pragma omp parallel for schedule(dynamic, 64) reduction(max : max_se, max_peeq) reduction(+ : nplast)
         for (int e = 0; e < m.ne; e++) {
             double ue[24]; elem_u(e, ufull, ue);
-            const double gsc = powder[e] ? FSOFT : 1.0; const bool reset = init_step || (hot[e] && !ABQANNEAL) || powder[e]; const bool aa = ABQANNEAL && !init_step && hot[e] && !powder[e];
+            const double gsc = powder[e] ? FSOFT : 1.0; const bool reset = init_step || (hot[e] && !ABQANNEAL) || powder[e];
             
             for (int q = 0; q < 8; q++) {
-                const size_t ip = (size_t)e * 8 + q; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const double *B = &G.Bb[ip * 144];
+                const size_t ip = (size_t)e * 8 + q; const bool aa = ABQANNEAL && !init_step && anneal_at(e, q, ip) && !powder[e]; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const double *B = &G.Bb[ip * 144];
                 double eps[6]; for (int i = 0; i < 6; i++) { double s = 0; for (int d = 0; d < 24; d++) s += B[i * 24 + d] * ue[d]; eps[i] = s; }
                 double wv[8]; for (int i = 0; i < 6; i++) wv[i] = eps[i] - S.s[ip * 7 + i]; wv[6] = ipT[ip]; wv[7] = S.s[ip * 7 + 6];
                 if (dump_now_) { for (int i = 0; i < 8; i++) wv_all_[ip * 9 + i] = wv[i]; wv_all_[ip * 9 + 8] = gsc; }
                 double sg[6], dep[6], da;
                 if (init_step) { for (int i = 0; i < 6; i++) sg[i] = 0.0; }
                 if (order == 0 || init_step) {
-                    if (!init_step) hill::phi_w<double>(wv, gsc, sg, dep, da);
+                    if (!init_step) hill::phi_w<double>(wv, gsc, sg, dep, da, ABQANNEAL);
                     for (int i = 0; i < 6; i++) sig_ip[ip * 6 + i] = sg[i];
                     // new state
                     if (init_step) { for (int i = 0; i < 6; i++) N_.s[ip * 7 + i] = -(i < 3 ? e0 : 0.0); N_.s[ip * 7 + 6] = 0.0; }
@@ -554,12 +568,12 @@ int main(int argc, char **argv) {
                         // bare_plate_single_layer: order 1 uses only F (values) and Gm (gradient) -- Jet<8,1> gives them bitwise
                         // identical to Jet<8,2> (the gradient part does not depend on the Hessian part) at a fraction of the cost
                         J81 wj[8]; for (int i = 0; i < 8; i++) wj[i] = J81::var(wv[i], i);
-                        J81 sj[6], dj[6], daj; hill::phi_w<J81>(wj, gsc, sj, dj, daj);
+                        J81 sj[6], dj[6], daj; hill::phi_w<J81>(wj, gsc, sj, dj, daj, ABQANNEAL);
                         for (int i = 0; i < 6; i++) { d.F[i] = sj[i].v; d.F[6 + i] = dj[i].v; for (int k = 0; k < 8; k++) d.Gm[i][k] = sj[i].g[k], d.Gm[6 + i][k] = dj[i].g[k]; }
                         d.F[12] = daj.v; for (int k = 0; k < 8; k++) d.Gm[12][k] = daj.g[k];
                     } else {
                     J82 wj[8]; for (int i = 0; i < 8; i++) wj[i] = J82::var(wv[i], i);
-                    J82 sj[6], dj[6], daj; hill::phi_w<J82>(wj, gsc, sj, dj, daj);
+                    J82 sj[6], dj[6], daj; hill::phi_w<J82>(wj, gsc, sj, dj, daj, ABQANNEAL);
                     for (int i = 0; i < 6; i++) { d.F[i] = sj[i].v; d.F[6 + i] = dj[i].v; for (int k = 0; k < 8; k++) d.Gm[i][k] = sj[i].g[k], d.Gm[6 + i][k] = dj[i].g[k]; for (int k = 0; k < 36; k++) d.H[i][k] = sj[i].h[k], d.H[6 + i][k] = dj[i].h[k]; }
                     d.F[12] = daj.v; for (int k = 0; k < 8; k++) d.Gm[12][k] = daj.g[k]; for (int k = 0; k < 36; k++) d.H[12][k] = daj.h[k];
                     }
@@ -638,9 +652,9 @@ int main(int argc, char **argv) {
                 #pragma omp parallel for schedule(dynamic, 64)
                 for (int e = 0; e < m.ne; e++) {
                     
-                    const bool reset = (hot[e] && !ABQANNEAL) || powder[e]; const bool aa = ABQANNEAL && hot[e] && !powder[e];
+                    const bool reset = (hot[e] && !ABQANNEAL) || powder[e];
                     for (int q = 0; q < 8; q++) {
-                        const size_t ip = (size_t)e * 8 + q; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const IPd &d = ipd[ip]; const double *B = &G.Bb[ip * 144];
+                        const size_t ip = (size_t)e * 8 + q; const bool aa = ABQANNEAL && !init_step && anneal_at(e, q, ip) && !powder[e]; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const IPd &d = ipd[ip]; const double *B = &G.Bb[ip * 144];
                         for (int i = 0; i < P; i++) {
                             double deps[6], ue[24]; for (int a = 0; a < 8; a++) for (int c = 0; c < 3; c++) ue[a * 3 + c] = du1f[(size_t)i * 3 * nv + 3 * (size_t)m.E[e][a] + c];
                             for (int r = 0; r < 6; r++) { double s = 0; for (int dd = 0; dd < 24; dd++) s += B[r * 24 + dd] * ue[dd]; deps[r] = s; }
@@ -707,9 +721,9 @@ int main(int argc, char **argv) {
                     #pragma omp parallel for schedule(dynamic, 32)
                     for (int e = 0; e < m.ne; e++) {
                         
-                        const bool reset = (hot[e] && !ABQANNEAL) || powder[e]; const bool aa = ABQANNEAL && hot[e] && !powder[e];
+                        const bool reset = (hot[e] && !ABQANNEAL) || powder[e];
                         for (int q = 0; q < 8; q++) {
-                            const size_t ip = (size_t)e * 8 + q; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const IPd &d = ipd[ip]; const double *B = &G.Bb[ip * 144];
+                            const size_t ip = (size_t)e * 8 + q; const bool aa = ABQANNEAL && !init_step && anneal_at(e, q, ip) && !powder[e]; [[maybe_unused]] double e0, e1, e2; eth_derivs(ipT[ip], e0, e1, e2); const IPd &d = ipd[ip]; const double *B = &G.Bb[ip * 144];
                             const double *dwb = &dw1[ip * P * 8];
                             for (int i = 0; i < P; i++) for (int j = i; j < P; j++) {
                                 const int pr = pk(i, j);
@@ -744,6 +758,28 @@ int main(int argc, char **argv) {
         else if (gpu && init_step) { mgpu::up(D.Ss, S.s.data(), S.s.size()); mgpu::up(D.Sds1, S.ds1.data(), S.ds1.size());
                                      if (order >= 2) mgpu::up(D.Sds2, S.ds2.data(), S.ds2.size()); }
 #endif
+        // Optional scalar field history for visualization. Store von Mises of
+        // the element-mean stress, matching the mechanical validation observable.
+        // Accepted thermal sample times only; Newton substeps are not video frames.
+        if (!vm_dumpdir.empty() && smp.step >= 0) {
+#ifdef USE_GPU_MECH
+            if (gstep) mgpu::down(sig_ip.data(), D.sig, sig_ip.size());
+#endif
+            vector<float> vm_field(m.ne);
+            #pragma omp parallel for
+            for (int e = 0; e < m.ne; e++) {
+                double s[6] = {0};
+                for (int q = 0; q < 8; q++) for (int c = 0; c < 6; c++) s[c] += sig_ip[((size_t)e * 8 + q) * 6 + c] / 8.0;
+                double a = s[0] - s[1], b = s[1] - s[2], c = s[2] - s[0];
+                // Shear stresses are Mandel components internally (sqrt(2)*Sij).
+                vm_field[e] = (float)std::sqrt(0.5*(a*a+b*b+c*c) + 1.5*(s[3]*s[3]+s[4]*s[4]+s[5]*s[5]));
+            }
+            std::ofstream vf(vm_dumpdir + "/vm_" + std::to_string(smp.step) + ".bin", std::ios::binary);
+            int hdr[2] = {m.ne, smp.step};
+            vf.write((char *)hdr, sizeof(hdr)); vf.write((char *)&smp.t, sizeof(double));
+            vf.write((char *)vm_field.data(), sizeof(float)*vm_field.size());
+            if (!vf) { fprintf(stderr, "Cannot write von Mises snapshot in %s\n", vm_dumpdir.c_str()); exit(4); }
+        }
         ufree_last = ufree;
         for (int e = 0; e < m.ne; e++) if (eTf[e] >= T_SOLIDUS) consolidated[e] = 1;
         double Tmax = 0; for (int v = 0; v < (int)nv; v++) Tmax = std::max(Tmax, smp.T[v]);

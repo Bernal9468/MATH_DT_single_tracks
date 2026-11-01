@@ -30,12 +30,25 @@ static const double Tt[NT] = HILL_VALS_Tt;
 #if defined(__CUDACC__)
 __constant__ double Tt_d[NT] = HILL_VALS_Tt;
 #endif
+#ifdef MATERIAL_IN718
+// MATH_DT (2026-10-28): IN718, Special Metals INCONEL alloy 718 datasheet SMC-045 (2007). E, nu: Table 4 (hot-rolled flat,
+// aged; dynamic) at 70, 200, 400, ..., 1600 F = the Tt grid. CTE: Table 5 mean linear expansion from 70 F (294.26 K) at
+// 200..1400 F, held at the 1400 F value above (table ends). Yield/hardening: Table 7 annealed (1750 F) hot-rolled round,
+// mean of 13 L/T tests: 0.2 % yield 433 MPa, UTS 831 MPa at 43 % elongation (AMB2022-03 plate: rolled + annealed sheet,
+// 800 C / 2 h stress relief), linear hardening, constant in T as in the IN625 deck; isotropic (wrought, no Hill ratios).
+#define HILL_VALS_Et {199948., 195811., 190295., 184090., 177885., 170990., 163406., 153753., 139274.}
+#else
 #define HILL_VALS_Et {207500., 204100., 197900., 191700., 185500., 178600., 170300., 160600., 147500.}
+#endif
 static const double Et[NT] = HILL_VALS_Et;
 #if defined(__CUDACC__)
 __constant__ double Et_d[NT] = HILL_VALS_Et;
 #endif
+#ifdef MATERIAL_IN718
+#define HILL_VALS_nut {0.294, 0.288, 0.280, 0.272, 0.271, 0.271, 0.283, 0.306, 0.331}
+#else
 #define HILL_VALS_nut {0.278, 0.28, 0.286, 0.29, 0.295, 0.305, 0.321, 0.34, 0.336}
+#endif
 static const double nut[NT] = HILL_VALS_nut;
 #if defined(__CUDACC__)
 __constant__ double nut_d[NT] = HILL_VALS_nut;
@@ -46,14 +59,24 @@ static const double Ta[NA] = HILL_VALS_Ta;
 #if defined(__CUDACC__)
 __constant__ double Ta_d[NA] = HILL_VALS_Ta;
 #endif
+#ifdef MATERIAL_IN718
+#define HILL_VALS_alphat {1.3158e-05, 1.3554e-05, 1.3932e-05, 1.4346e-05, 1.4562e-05, 1.5102e-05, 1.6038e-05, 1.6038e-05, 1.6038e-05}
+#else
 #define HILL_VALS_alphat {1.28e-05, 1.31e-05, 1.33e-05, 1.37e-05, 1.4e-05, 1.48e-05, 1.53e-05, 1.58e-05, 1.62e-05}
+#endif
 static const double alphat[NA] = HILL_VALS_alphat;
 #if defined(__CUDACC__)
 __constant__ double alphat_d[NA] = HILL_VALS_alphat;
 #endif
+#ifdef MATERIAL_IN718
+static constexpr double T_ref = 296.5, T_zero = 294.26;     // initial plate temperature (23.5 C, C2K = 273.0); CTE reference 70 F
+static constexpr double sigma_y0 = 433.0, sigma_y1 = 831.0, eps_p1 = 0.43;
+static constexpr double R11 = 1.0, R22 = 1.0, R33 = 1.0, R12 = 1.0, R13 = 1.0, R23 = 1.0;
+#else
 static constexpr double T_ref = 303.15, T_zero = 298.15;
 static constexpr double sigma_y0 = 725.0, sigma_y1 = 990.0, eps_p1 = 0.35;
 static constexpr double R11 = 1.0, R22 = 1.0, R33 = 0.8483, R12 = 1.0, R13 = 1.0, R23 = 1.0;
+#endif
 
 JET_HD inline void HillP(double P[6][6]) {
     double F = 0.5 * (1.0 / (R22 * R22) + 1.0 / (R33 * R33) - 1.0 / (R11 * R11));
@@ -86,6 +109,23 @@ template <class S> JET_HD inline S yield_of(const S &a) {
     return val(s) > sigma_y1 ? S(sigma_y1) : s;
 }
 
+// Match the Abaqus replica's *PLASTIC rows: full hardening below Ta-1,
+// linear reduction over the last kelvin, perfect plasticity at/above Ta.
+#ifdef MATERIAL_IN718
+static constexpr double anneal_temperature = 1533.15;
+#else
+static constexpr double anneal_temperature = 1563.0;
+#endif
+JET_HD inline bool annealed(double T) { return T >= anneal_temperature; }
+template <class S> JET_HD inline S hardening_scale(const S &T, bool abqanneal) {
+    if (!abqanneal || val(T) <= anneal_temperature - 1.0) return S(1.0);
+    if (annealed(val(T))) return S(0.0);
+    return anneal_temperature - T;
+}
+template <class S> JET_HD inline S scaled_yield(const S &a, const S &hscale) {
+    return sigma_y0 + hscale * (yield_of(a) - sigma_y0);
+}
+
 template <class S> JET_HD inline void solve6(S A[6][6], const S b[6], S x[6]) {
     S M[6][7];
     for (int i = 0; i < 6; i++) { for (int j = 0; j < 6; j++) M[i][j] = A[i][j]; M[i][6] = b[i]; }
@@ -111,19 +151,19 @@ template <class S> JET_HD inline S quad6(const S s[6], const double P[6][6], S P
 }
 
 // g(b) = se(sigma(b)) - yield(alpha_old + b*se),  sigma(b) = (I + b M)^-1 sigma_trial
-template <class S> JET_HD inline S g_of(const S &b, S M[6][6], const S sig_tr[6], const double P[6][6], const S &alpha_old, S sig_out[6], S &se_out) {
+template <class S> JET_HD inline S g_of(const S &b, S M[6][6], const S sig_tr[6], const double P[6][6], const S &alpha_old, S sig_out[6], S &se_out, const S &hscale = S(1.0)) {
     S A[6][6];
     for (int i = 0; i < 6; i++) for (int j = 0; j < 6; j++) A[i][j] = M[i][j] * b + (i == j ? 1.0 : 0.0);
     solve6(A, sig_tr, sig_out);
     S Ps[6]; S q = quad6(sig_out, P, Ps);
     se_out = val(q) > 0.0 ? jsqrt(q) : S(0.0);
-    return se_out - yield_of(alpha_old + b * se_out);
+    return se_out - scaled_yield(alpha_old + b * se_out, hscale);
 }
 
 // Core map in the 8 variables w = (e[6] = eps_bbar - epsp_old (Mandel), T, alpha_old):
 //   sigma(w), delta_epsp(w) (plastic strain increment, Mandel), delta_alpha(w)
 static constexpr int NW8 = 8;
-template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig[6], S dep[6], S &dalpha) {
+template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig[6], S dep[6], S &dalpha, bool abqanneal = false) {
     double P[6][6]; HillP(P);
     const S &T = w[6];
     S E = pw(HILL_TBL(Tt), HILL_TBL(Et), NT, T), nu = pw(HILL_TBL(Tt), HILL_TBL(nut), NT, T);
@@ -140,8 +180,9 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
     S eel[6], sig_tr[6];
     for (int i = 0; i < 6; i++) eel[i] = w[i] - (i < 3 ? eth : S(0.0));
     for (int i = 0; i < 6; i++) { S a(0.0); for (int j = 0; j < 6; j++) a += C[i][j] * eel[j]; sig_tr[i] = a; }
-    const S &alpha_old = w[7];
-    S sy_old = yield_of(alpha_old);
+    const S alpha_old = (abqanneal && annealed(val(T))) ? S(0.0) : w[7];
+    const S hscale = hardening_scale(T, abqanneal);
+    S sy_old = scaled_yield(alpha_old, hscale);
     S Ps[6]; S qtr = quad6(sig_tr, P, Ps);
     const double se_tr = val(qtr) > 0.0 ? std::sqrt(val(qtr)) : 0.0;
 
@@ -151,14 +192,14 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
         // real-part solve: safeguarded Newton with a 1-variable dual number (exact dg/db), then G0 = dg/db at the root
         typedef Jet<1, 1> D1;
         D1 Mj[6][6], strj[6]; for (int i = 0; i < 6; i++) { strj[i] = D1(val(sig_tr[i])); for (int j = 0; j < 6; j++) Mj[i][j] = D1(val(M[i][j])); }
-        D1 a0j(val(alpha_old)), sej, svj[6];
+        D1 a0j(val(alpha_old)), hsj(val(hscale)), sej, svj[6];
         double b = 0.0, G0 = 1.0;
         {   // bracket [lo,hi], g(lo)>0>g(hi); g is smooth and decreasing in b
             double lo = 0.0, hi = 1e-6;
-            for (int k = 0; k < 200; k++) { D1 gh = g_of<D1>(D1::var(hi, 0), Mj, strj, P, a0j, svj, sej); if (gh.v < 0.0) break; lo = hi; hi *= 2.0; }
+            for (int k = 0; k < 200; k++) { D1 gh = g_of<D1>(D1::var(hi, 0), Mj, strj, P, a0j, svj, sej, hsj); if (gh.v < 0.0) break; lo = hi; hi *= 2.0; }
             b = 0.5 * (lo + hi);
             for (int it = 0; it < 200; it++) {
-                D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej);
+                D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej, hsj);
                 G0 = gj.g[0];
                 if (std::fabs(gj.v) < 1e-13 * (val(sy_old) > 1.0 ? val(sy_old) : 1.0)) break;
                 if (gj.v > 0.0) lo = b; else hi = b;
@@ -168,14 +209,14 @@ template <class S> JET_HD inline void phi_w(const S w[NW8], double gscale, S sig
                 b = bn;
             }
         }
-        { D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej); G0 = gj.g[0]; }
+        { D1 gj = g_of<D1>(D1::var(b, 0), Mj, strj, P, a0j, svj, sej, hsj); G0 = gj.g[0]; }
         S bj(b), se_j, sg[6];
         constexpr int NIT = std::is_same<S, double>::value ? 1 : 3;
         for (int it = 0; it < NIT; it++) {
-            S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j);
+            S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j, hscale);
             bj = bj - gj * (1.0 / G0);
         }
-        S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j);   // sigma(beta), se(beta) at the refined beta
+        S gj = g_of<S>(bj, M, sig_tr, P, alpha_old, sg, se_j, hscale);   // sigma(beta), se(beta) at the refined beta
         S dgam = bj * se_j;
         for (int i = 0; i < 6; i++) sig[i] = sg[i];
         dalpha = dgam;
