@@ -22,6 +22,7 @@ ap.add_argument("--steps", type=int, default=517); ap.add_argument("--every", ty
 ap.add_argument("--elems", required=True)
 ap.add_argument("--rtol", type=float, default=1e-8, help="mechanical force/correction convergence tolerance for FD")
 ap.add_argument("--first-substeps", type=int, default=1, help="fixed subdivisions of the first temperature interval (match MFEM splits)")
+ap.add_argument("--state-output", action="store_true", help="also S, PEEQ, TEMP of every element each step (yield/anneal state for tools/abaqus_state_extract.py)")
 a = ap.parse_args()
 if not 0 < a.rtol < 1 or a.first_substeps < 1: ap.error("invalid convergence tolerance or first-step subdivision count")
 
@@ -70,7 +71,9 @@ for k in samples:
     w.write(f"*TEMPERATURE, FILE={a.thermal_job}, BSTEP={k}, BINC=1, ESTEP={k}, EINC=1\n")
     # stresses of the LINE elements at the end of the step, in the odb (single precision, ~7 digits: *EL PRINT has only 4,
     # too coarse for +-1 % finite differences); tools/abaqus_mech_extract.py reads them
-    w.write("*OUTPUT, FIELD, FREQUENCY=99999\n*ELEMENT OUTPUT, ELSET=LINE\nS\n*END STEP\n")
+    w.write("*OUTPUT, FIELD, FREQUENCY=99999\n*ELEMENT OUTPUT, ELSET=LINE\nS\n")
+    if a.state_output: w.write("*OUTPUT, FIELD, FREQUENCY=99999\n*ELEMENT OUTPUT\nS, PEEQ, TEMP\n")
+    w.write("*END STEP\n")
 w.close()
 print(f"written {a.out}: {nv} nodes, {ne} C3D8, {len(elems)} output elements, {len(samples)} static steps "
       f"(thermal steps {samples[0]}..{samples[-1]}); E {Et[0]:.0f}..{Et[-1]:.0f} MPa, yield {sy0}->{sy1} at {ep1}, "

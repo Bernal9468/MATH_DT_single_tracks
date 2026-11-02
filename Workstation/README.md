@@ -81,6 +81,14 @@ MESH=$PWD/mesh/track_h0.04_x-0.6_1.5.mesh DUMP=$PWD/results/abaqus_fd/mfem/field
     bash run/run_mech.sh gpu 0 results/mech/case0_h40_abqmatch -probeelem $(cat mesh/line_elems_h40.txt)
 python3 tools/abaqus_mech_fd_compare.py results/mech/case0_h40_abqmatch results/abaqus_mech mesh/line_elems_h40.txt 92389 --h 0.001 \
     --out results/mech/case0_h40_abqmatch/verification                                                 # -> abaqus_mech_fd_*.png, *_values.csv, *_summary.json
+# branch-aware reference: where a +/- run switches plastic/elastic or anneal state near an element, the central quotient
+# mixes two branches (forward and backward quotients disagree by O(1)); there the one-sided quotient of the run that stayed
+# on the nominal branch is used, chosen from the Abaqus integration-point states (S, PEEQ, TEMP of every element and step).
+# Full history, h = 0.001: every NRMSE below 1 % (k, cp, rho, L; line at 0.75/1.50/2.40 ms and probe)
+MECH_DECK_ARGS="--state-output" JOBS=3 CPUS=4 bash run/abaqus_mech_fd.sh results/abaqus_fd/fd_nt results/abaqus_mech \
+    $PWD/mesh/track_h0.04_x-0.6_1.5.mesh mesh/line_elems_h40.txt 10                                     # + m_<job>_state.npz
+python3 tools/abaqus_mech_fd_compare.py results/mech/case0_h40_abqmatch results/abaqus_mech mesh/line_elems_h40.txt 92389 --h 0.001 \
+    --state-dir results/abaqus_mech --out results/mech/case0_h40_abqmatch/verification_branch            # ref_kind column: central/forward/backward
 # anneal-history audit (which elements cross the anneal temperature differently in the FD runs):
 #   abaqus python tools/abaqus_anneal_audit.py mesh/track_h0.04_x-0.6_1.5.mesh results/abaqus_fd/fd_nt results/abaqus_fd/mfem/fields results/anneal_audit
 ```

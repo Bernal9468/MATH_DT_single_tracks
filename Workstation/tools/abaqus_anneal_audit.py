@@ -46,6 +46,10 @@ nominal=dict(max_abs_element_temperature_K=float(abs(mm-nom).max()),rms_element_
 for p in ['k','cp','rho','L']:
     plus=masks[p+'_p'];minus=masks[p+'_m'];diff=plus!=minus
     stats[p]=dict(plus_minus_anneal_flag_disagreements=int(diff.sum()),elements_with_different_anneal_history=int(np.any(diff,axis=0).sum()),disagreements_by_step=[int(x) for x in diff.sum(axis=1)])
+    # per side: elements (Abaqus labels = MFEM index + 1) whose anneal history leaves the nominal one, with the first sample
+    for side in ['p','m']:
+        d=masks[p+'_'+side]!=masks['nom'];el=np.where(np.any(d,axis=0))[0]
+        stats[p]['changed_'+side]=dict((str(e+1),int(steps[int(np.argmax(d[:,e]))])) for e in el)
 with open(os.path.join(out,'audit.json'),'w') as f:json.dump(dict(steps=steps,threshold_K=Ta,nominal=nominal,parameters=stats),f,indent=2)
 print('nominal',nominal)
 for p in ['k','cp','rho','L']:print(p,stats[p]['plus_minus_anneal_flag_disagreements'],stats[p]['elements_with_different_anneal_history'])

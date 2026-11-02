@@ -6,6 +6,9 @@ MFEM: a mechanical run with element-mean temperature (omit -iptemp) and -probeel
 Abaqus: m_<job>_S.csv (tools/abaqus_mech_extract.py: S of the same elements, element = MFEM id + 1, mean of the 8
 integration points) at the end of every static step (one per thermal sample, thermal step = EVERY * step number, the last one = the last thermal step).
 d sigma_vM / ds_p = (vM(1 + H) - vM(1 - H)) / (2 H); NRMSE = RMS(AD - FD) / (max FD - min FD).
+--state-dir: branch-aware reference (one-sided quotient where the forward and backward quotients disagree, a kink, on the
+side of the run that stayed on the nominal plastic/anneal branch, see reference()); fd_MPa in the CSV stays the central
+quotient, ref_MPa/ref_kind the reference used.
 Figures (in FDDIR): abaqus_mech_fd_line_t<ms>.png (centreline elements), abaqus_mech_fd_probe.png (history at PROBE).
 usage: abaqus_mech_fd_compare.py MECH_RUN FDDIR ELEMS_FILE PROBE_ELEM [--t 0.75 1.5 2.4] [--h 0.01] [--every 10]
 """
@@ -19,6 +22,8 @@ ap.add_argument("--t", type=float, nargs="+", default=[0.75, 1.5, 2.4]); ap.add_
 ap.add_argument("--every", type=int, default=10); ap.add_argument("--dt", type=float, default=5e-6)
 ap.add_argument("--out", help="directory for figures and numerical exports (defaults to FDDIR)")
 ap.add_argument("--allow-partial", action="store_true", help="explicitly permit missing jobs or steps")
+ap.add_argument("--state-dir", help="branch-aware reference: s_<job>_state.npz or m_<job>_state.npz of tools/abaqus_state_extract.py (all 9 jobs)")
+ap.add_argument("--kink-tol", type=float, default=0.03, help="branch-aware: kink where |forward - backward| > KINK_TOL * range of the central quotient")
 ap.add_argument("--mesh", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mesh", "track_h0.04_x-0.6_1.5.mesh"))
 a = ap.parse_args()
 outdir = a.out or a.fd
@@ -94,13 +99,48 @@ if len(covered) != len(steps):
 print(len(steps), "common Abaqus steps; last thermal time", max(T_ab.values()))
 vmA = lambda j, n, e: vm_and_d(D[j][n][e + 1][:, None], D[j][n][e + 1][:, None])[0][0]
 
+# Branch-aware reference: the stress is not differentiable where a perturbed run leaves the nominal discrete state
+# (an integration point switches between plastic flow and elastic unloading, or an element between annealed and not).
+# There the forward and backward quotients disagree by O(1) instead of O(h): a kink (|forward - backward| > KINK_TOL *
+# range of the central quotient over the line or history). Off kinks: central. On a kink, the run that switched is the
+# one with a state flip (vs nom, any earlier step) nearest the element; the other run's one-sided quotient is the
+# reference (excluded on a tie). Decided from the Abaqus results only.
+DM = {}
+if a.state_dir:
+    sfile = lambda j: next((f for f in (os.path.join(a.state_dir, f"{x}_{j}_state.npz") for x in ("s", "m")) if os.path.exists(f)), None)
+    if any(sfile(j) is None for j in D): ap.error("missing s_<job>_state.npz / m_<job>_state.npz in " + a.state_dir)
+    st = {j: np.load(sfile(j)) for j in D}
+    cen = V[E].mean(1); xe = cen[elems]
+    nomS = st["nom"]; lab = nomS["label"] - 1
+    for j in D:
+        if j == "nom": continue
+        if not (np.array_equal(st[j]["label"], nomS["label"]) and np.array_equal(st[j]["ip"], nomS["ip"])): ap.error(f"state points of {j} differ from nom")
+        flip = (st[j]["plastic"] != nomS["plastic"]) | (st[j]["annealed"] != nomS["annealed"])   # nstep x npoint
+        d = np.full(len(elems), np.inf); DM[j] = {}
+        for k, s in enumerate(nomS["step"]):
+            el = np.unique(lab[flip[k]])
+            if len(el): d = np.minimum(d, np.linalg.norm(xe[:, None, :] - cen[el][None, :, :], axis=2).min(1))
+            DM[j][int(s)] = d.copy()                                   # nearest flip up to and including step s
 
-def nrmse(ad, fd): return 100 * np.sqrt(np.mean((ad - fd) ** 2)) / max(fd.max() - fd.min(), 1e-30)
+
+def reference(p, ns, idx, fd, forward, backward):
+    """branch-aware FD reference and its kind per (step, element index) (central FD without --state-dir)"""
+    if not DM: return fd, np.array(["central"] * len(fd))
+    kink = np.abs(forward - backward) > a.kink_tol * (fd.max() - fd.min())
+    dp = np.array([DM[p + "_p"][n][i] for n, i in zip(ns, idx)]); dm = np.array([DM[p + "_m"][n][i] for n, i in zip(ns, idx)])
+    kind = np.where(~kink, "central", np.where(dm < dp, "forward", np.where(dp < dm, "backward", "excluded")))
+    ref = np.select([kind == "central", kind == "forward", kind == "backward"], [fd, forward, backward], np.nan)
+    return ref, kind
+
+
+def nrmse(ad, fd):
+    ok = np.isfinite(fd); ad, fd = ad[ok], fd[ok]                  # excluded points (branch-aware) are NaN
+    return 100 * np.sqrt(np.mean((ad - fd) ** 2)) / max(fd.max() - fd.min(), 1e-30)
 
 
 def panel(xs, ad, fd, ax, lab, xl):
     ax.plot(xs, ad, color="red", lw=3.0, label="MFEM AD")
-    ax.plot(xs, fd, color="black", lw=2.0, ls=(0, (4, 3)), label=f"Abaqus central FD (±{100 * a.h:g}%)")
+    ax.plot(xs, fd, color="black", lw=2.0, ls=(0, (4, 3)), label=f"Abaqus {'branch-aware' if DM else 'central'} FD (±{100 * a.h:g}%)")
     ax.set_ylabel(lab + "  [MPa]"); ax.text(0.97, 0.06, f"NRMSE = {nrmse(ad, fd):.2f} %", transform=ax.transAxes, ha="right",
                                            bbox=dict(fc="white", ec="none", alpha=0.85, pad=2))
     ax.set_xlabel(xl)
@@ -108,6 +148,8 @@ def panel(xs, ad, fd, ax, lab, xl):
 
 res = {}
 asymmetry = {}
+kinds = {}
+count = lambda k: {c: int(np.sum(k == c)) for c in ("central", "forward", "backward", "excluded")}
 records = []
 NR = 1 if len(PAR) <= 2 else 2
 
@@ -132,9 +174,11 @@ for tms in a.t:
         forward = np.array([(vmA(p + "_p", n, e) - vmA("nom", n, e)) / a.h for e in elems])
         backward = np.array([(vmA("nom", n, e) - vmA(p + "_m", n, e)) / a.h for e in elems])
         asymmetry[f"line {tt * 1e3:.2f} ms {p}"] = float(np.max(np.abs(forward - backward)))
+        ref, kind = reference(p, [n] * len(elems), range(len(elems)), fd, forward, backward); kinds[f"line {tt * 1e3:.2f} ms {p}"] = count(kind)
         records.extend(dict(kind="line", parameter=p, t_s=float(tt), x_mm=float(x), ad_MPa=float(av), fd_MPa=float(fv),
-                            fd_forward_MPa=float(ff), fd_backward_MPa=float(fb)) for x, av, fv, ff, fb in zip(xc, ad, fd, forward, backward))
-        panel(xc, ad, fd, ax, lab, "x [mm]" if ax in axs[-1] else ""); res[f"line {tt * 1e3:.2f} ms {p}"] = nrmse(ad, fd)
+                            fd_forward_MPa=float(ff), fd_backward_MPa=float(fb), ref_MPa=float(rv), ref_kind=rk)
+                       for x, av, fv, ff, fb, rv, rk in zip(xc, ad, fd, forward, backward, ref, kind))
+        panel(xc, ad, ref, ax, lab, "x [mm]" if ax in axs[-1] else ""); res[f"line {tt * 1e3:.2f} ms {p}"] = nrmse(ad, ref)
     axs[0, 0].legend(loc="upper center", bbox_to_anchor=(1.05, 1.12 + 0.1 * NR), ncol=2, frameon=False)
     out = os.path.join(outdir, f"abaqus_mech_fd_line_t{tt * 1e3:.2f}.png"); fig.savefig(out, dpi=170, bbox_inches="tight"); print("written", out)
 # probe history
@@ -146,18 +190,21 @@ for q, (ax, (p, j, lab)) in enumerate(zip(axs.flat, PAR)):
     forward = np.array([(vmA(p + "_p", n, e) - vmA("nom", n, e)) / a.h for n in steps])
     backward = np.array([(vmA("nom", n, e) - vmA(p + "_m", n, e)) / a.h for n in steps])
     asymmetry["probe " + p] = float(np.max(np.abs(forward - backward)))
-    records.extend(dict(kind="probe", parameter=p, t_s=float(t), x_mm=float(xc[elems.index(e)]), ad_MPa=float(av), fd_MPa=float(fv),
-                        fd_forward_MPa=float(ff), fd_backward_MPa=float(fb)) for t, av, fv, ff, fb in zip(tA, ad, fd, forward, backward))
-    panel(tA * 1e3, ad, fd, ax, lab, "t [ms]" if ax in axs[-1] else ""); res["probe " + p] = nrmse(ad, fd)
+    ie = elems.index(e); ref, kind = reference(p, steps, [ie] * len(steps), fd, forward, backward); kinds["probe " + p] = count(kind)
+    records.extend(dict(kind="probe", parameter=p, t_s=float(t), x_mm=float(xc[ie]), ad_MPa=float(av), fd_MPa=float(fv),
+                        fd_forward_MPa=float(ff), fd_backward_MPa=float(fb), ref_MPa=float(rv), ref_kind=rk)
+                   for t, av, fv, ff, fb, rv, rk in zip(tA, ad, fd, forward, backward, ref, kind))
+    panel(tA * 1e3, ad, ref, ax, lab, "t [ms]" if ax in axs[-1] else ""); res["probe " + p] = nrmse(ad, ref)
 axs[0, 0].legend(loc="upper center", bbox_to_anchor=(1.05, 1.12 + 0.1 * NR), ncol=2, frameon=False)
 fig.savefig(os.path.join(outdir, "abaqus_mech_fd_probe.png"), dpi=170, bbox_inches="tight"); print("written abaqus_mech_fd_probe.png")
-for k, v in res.items(): print(f"  NRMSE {k:22s} {v:6.2f} %")
+for k, v in res.items(): print(f"  NRMSE {k:22s} {v:6.2f} %" + (f"   reference {kinds[k]}" if DM else ""))
 
 with open(os.path.join(outdir, "abaqus_mech_fd_values.csv"), "w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=["kind", "parameter", "t_s", "x_mm", "ad_MPa", "fd_MPa", "fd_forward_MPa", "fd_backward_MPa"])
+    writer = csv.DictWriter(f, fieldnames=["kind", "parameter", "t_s", "x_mm", "ad_MPa", "fd_MPa", "fd_forward_MPa", "fd_backward_MPa", "ref_MPa", "ref_kind"])
     writer.writeheader(); writer.writerows(records)
 with open(os.path.join(outdir, "abaqus_mech_fd_summary.json"), "w") as f:
     json.dump(dict(relative_step=a.h, complete=complete, missing_jobs=missing, common_steps=len(steps),
                    expected_steps=len(BS), stress_measure="von Mises of element-mean stress",
                    derivative="d sigma_vM / d s_p, material property = nominal property * s_p",
-                   nrmse_percent=res, max_abs_one_sided_disagreement_MPa=asymmetry), f, indent=2)
+                   nrmse_percent=res, max_abs_one_sided_disagreement_MPa=asymmetry,
+                   reference=dict(branch_aware=True, kink_tol=a.kink_tol, kinds=kinds) if DM else "central"), f, indent=2)

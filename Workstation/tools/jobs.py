@@ -5,12 +5,13 @@ recently finished / failed runs, CPU and GPU load.
   python3 tools/jobs.py            one snapshot
   python3 tools/jobs.py -w         live view, updated in place every 5 min (-w 60: every 60 s; Ctrl-C to quit)
   python3 tools/jobs.py -n 20      show the 20 most recent finished runs
+Abaqus analyses (a .lck file in results/) are listed with their step progress from the .sta file.
 
 Progress of a simulation = last simulated time in its probe.csv (written every step) / t_final from settings.txt.
 A run is RUNNING if a thermal program writes into its folder, DONE if run.log has the final 'Wall time' line, otherwise
 STOPPED (killed or crashed; see its run.log).
 """
-import argparse, glob, os, re, shutil, signal, subprocess, sys, time
+import argparse, glob, json, os, re, shutil, signal, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = os.path.join(ROOT, "results")
@@ -111,6 +112,47 @@ def loads():
     return "   ".join(out)
 
 
+NSTEP = {}   # (inp, mtime) -> number of *STEP in the deck (decks are large: counted once)
+
+
+def abaqus_jobs(P, now):
+    """Abaqus analyses (a .lck file: running) with step progress from .sta, and the FD study drivers (run/check_*.py)
+    with the stage of their results/<study>/status.json"""
+    L = ["\n" + BOLD("ABAQUS JOBS")]
+    lcks = sorted(glob.glob(os.path.join(RES, "**", "*.lck"), recursive=True))
+    if not lcks: L.append(DIM("  none"))
+    for lck in lcks:
+        job = lck[:-4]; inp = job + ".inp"
+        try: key = (inp, os.path.getmtime(inp))
+        except OSError: key = None
+        if key and key not in NSTEP:
+            NSTEP[key] = sum(1 for l in open(inp, errors="replace") if l[:5].upper() == "*STEP")
+        n = NSTEP.get(key, 0); step = 0
+        if os.path.exists(job + ".sta"):
+            rows = [l.split() for l in open(job + ".sta", errors="replace") if re.match(r"\s+\d+\s+\d+", l)]
+            step = int(rows[-1][0]) if rows else 0
+        # a killed analysis leaves its .lck behind: no output written for 30 min = stale lock, not a running job
+        last = max(os.path.getmtime(p) for p in [lck] + glob.glob(job + ".*") if os.path.exists(p))
+        if now - last > 1800:
+            L.append(f"  {RED('✖')} {os.path.basename(job):16s} " + RED(f"stale lock (no output since {time.strftime('%m-%d %H:%M', time.localtime(last))}), "
+                     f"stopped at step {step}/{n}"))
+            L.append(DIM(f"      {short(os.path.dirname(job))}"))
+            continue
+        f = step / n if n else 0.0; el = now - os.path.getmtime(lck); eta = el * (1 - f) / f if f > 0.01 else None
+        L.append(f"  {GREEN('●')} {os.path.basename(job):16s} {bar(f)} {f * 100:5.1f} %   step {step}/{n}   "
+                 f"elapsed {fmt_t(el)}  ETA {fmt_t(eta)}")
+        L.append(DIM(f"      {short(os.path.dirname(job))}"))
+    for pid, a in P:
+        if len(a) >= 2 and a[0].startswith("python") and any("run/check_" in x for x in a):
+            script = os.path.basename(next(x for x in a if "run/check_" in x))
+            L.append(f"  {CYAN('◆')} {script}" + DIM(f"   started {time.strftime('%H:%M', time.localtime(proc_start(pid) or now))}  pid {pid}"))
+            for s in sorted(glob.glob(os.path.join(RES, "*", "status.json")), key=os.path.getmtime)[-1:]:
+                try: st = json.load(open(s))
+                except Exception: continue
+                L.append(DIM(f"      {short(os.path.dirname(s))}: stage {st.get('stage')}, updated {st.get('updated', '?')[11:16]}"))
+    return L
+
+
 def snapshot(nrecent):
     now = time.time(); P = procs(); L = []
     L.append(BOLD(f"single-track jobs   {time.strftime('%Y-%m-%d %H:%M:%S')}") + "   " + DIM(loads()))
@@ -138,6 +180,7 @@ def snapshot(nrecent):
         L.append(DIM(f"      {short(d)}   eta={st.get('absorptivity', '?')} c={st.get('c', '?')} dt={st.get('dt', '?')} "
                      f"mesh={os.path.basename(st.get('mesh', '?'))} {('extra=' + st['extra']) if st.get('extra') else ''}"
                      + (f"  pid {pid}" if pid else "")))
+    L += abaqus_jobs(P, now)
     if shutil.which("squeue"):
         L.append("\n" + BOLD("SLURM JOBS"))
         try:
