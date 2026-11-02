@@ -1,0 +1,10 @@
+# results, logs, binaries and generated meshes live in /work/gyj329/MFEM/implementations/Single_tracks/GO_MELT;
+# these symlinks only keep the job scripts' relative paths working.
+results
+logs
+bin
+ref
+mesh/*.mesh
+mesh/*_tie.txt
+*.o
+*.bak*
